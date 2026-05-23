@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Continuous justified block layout like a real Mushaf.
-Verses flow together, waqf signs removed, ayah markers inline with ﴿ ﴾.
+Verses flow together, waqf marks preserved with proper OpenType shaping,
+ayah markers inline with ﴿ ﴾.
 """
 
 import json
 import os
 import subprocess
+import unicodedata
 import urllib.request
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from PIL.ImageFont import Layout
 
 WIDTH = 1920
 HEIGHT = 1080
@@ -22,7 +25,7 @@ FONT_AMIRI_BOLD = "/home/mine/.local/share/fonts/Amiri-Bold.ttf"
 FONT_SIZE = 58
 FONT_SIZE_BASMALAH = 64
 FONT_SIZE_SURAH = 46
-LINE_H = int(FONT_SIZE * 1.6)
+LINE_H = 150
 MARGIN_X = int(WIDTH * 0.075)
 TEXT_WIDTH = WIDTH - 2 * MARGIN_X
 
@@ -33,8 +36,8 @@ DARK_GOLD = (100, 75, 25)
 BASMALAH_COLOR = (220, 190, 100)
 MARKER_COLOR = (180, 145, 65)
 
-WAQF_SIGNS = set(chr(cp) for cp in range(0x06D6, 0x06EE))
 BASMALAH_WORD = "\u0628\u0650\u0633\u0652\u0645\u0650"
+AYAH_MARKER = "\u06DD"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "output")
@@ -47,8 +50,20 @@ def to_arabic_numeral(n):
     return "".join(chr(0x0660 + int(c)) if c.isdigit() else c for c in str(n))
 
 
-def clean_text(text):
-    return "".join(c for c in text if c not in WAQF_SIGNS)
+def attach_waqf_marks(words):
+    """Merge standalone combining marks (e.g. waqf symbols) with preceding word.
+
+    U+06D6-U+06ED (waqf marks) are Unicode Mn (Mark Nonspacing) category.
+    RAQM positions them above the preceding base character when attached
+    without a space, producing correct superscript-waqf rendering.
+    """
+    result = []
+    for w in words:
+        if result and all(unicodedata.category(c) == 'Mn' for c in w):
+            result[-1] += w
+        else:
+            result.append(w)
+    return result
 
 
 def strip_bismillah(text):
@@ -63,8 +78,8 @@ def measure_word(font, word):
     return bbox[2] - bbox[0]
 
 
-def draw_ornament_line(draw, y, color=GOLD, thickness=1, length=250):
-    cx = WIDTH // 2
+def draw_ornament_line(draw, y, width, color=GOLD, thickness=1, length=250):
+    cx = width // 2
     draw.line([(cx - length, y), (cx - 6, y)], fill=color, width=thickness)
     draw.line([(cx + 6, y), (cx + length, y)], fill=color, width=thickness)
     draw.ellipse([(cx - 5, y - 4), (cx + 5, y + 4)], fill=color)
@@ -72,28 +87,38 @@ def draw_ornament_line(draw, y, color=GOLD, thickness=1, length=250):
 
 def draw_surah_header(draw, y, name_ar, font_ar):
     cx = WIDTH // 2
-    draw_ornament_line(draw, y, GOLD, 2)
-    y += 28
+    draw_ornament_line(draw, y, WIDTH, GOLD, 2)
+
     bbox = font_ar.getbbox(name_ar)
     tw = bbox[2] - bbox[0]
-    draw.text((cx - tw // 2, y), name_ar, fill=GOLD, font=font_ar)
-    y += FONT_SIZE_SURAH + 16
-    draw_ornament_line(draw, y, GOLD, 2)
-    return y + 40
+    asc = bbox[1]
+    desc = bbox[3]
+    text_h = desc - asc
+
+    GAP = 35
+    y_text = y + GAP - asc
+    y_bottom = y + 2 * GAP + text_h
+
+    draw.text((cx - tw // 2, y_text), name_ar, fill=GOLD, font=font_ar)
+    draw_ornament_line(draw, y_bottom, WIDTH, GOLD, 2)
+    return y_bottom + 40
 
 
 def draw_basmalah(draw, y, font_basm):
-    text = "\u0628\u0650\u0633\u0652\u0645\u0650 \u0627\u0644\u0644\u0651\u064e\u0647\u0650 \u0627\u0644\u0631\u0651\u064e\u062d\u0652\u0645\u064e\u0670\u0646\u0650 \u0627\u0644\u0631\u0651\u064e\u062d\u0650\u064a\u0645\u0650"
+    text = "\u0628\u0650\u0633\u0652\u0645\u0650 \u0671\u0644\u0644\u0651\u064e\u0647\u0650 \u0671\u0644\u0631\u0651\u064e\u062d\u0652\u0645\u064e\u0670\u0646\u0650 \u0671\u0644\u0631\u0651\u064e\u062d\u0650\u064a\u0645\u0650"
     bbox = font_basm.getbbox(text)
     tw = bbox[2] - bbox[0]
     draw.text(((WIDTH - tw) // 2, y), text, fill=BASMALAH_COLOR, font=font_basm)
-    return y + FONT_SIZE_BASMALAH + 60
+    rule_y = y + bbox[3] + 8
+    draw.line([(MARGIN_X, rule_y), (WIDTH - MARGIN_X, rule_y)],
+               fill=DARK_GOLD, width=1)
+    return rule_y + 4
 
 
 def build_justified_lines(all_words, font, max_width):
     word_data = []
     for w in all_words:
-        is_marker = w.startswith("\uFD3F") and w.endswith("\uFD3E")
+        is_marker = w.startswith(AYAH_MARKER)
         bbox = font.getbbox(w)
         ww = bbox[2] - bbox[0]
         word_data.append((w, ww, is_marker))
@@ -130,33 +155,19 @@ def draw_justified_line(draw, y, word_items, font, max_width, is_last):
     words = [w for w, _, _ in word_items]
     widths = [ww for _, ww, _ in word_items]
 
-    if len(words) == 1 or is_last:
-        text = " ".join(words)
-        bbox = font.getbbox(text)
-        tw = bbox[2] - bbox[0]
-        draw.text((WIDTH - MARGIN_X - tw, y), text, fill=TEXT_COLOR, font=font)
-        # Overdraw markers in gold
-        for w, ww, is_marker in word_items:
-            if is_marker:
-                without = " ".join(w2 for w2, _, m in word_items if not m)
-                if without:
-                    wb = font.getbbox(without)
-                    ww2 = wb[2] - wb[0]
-                    sb = font.getbbox(" ")
-                    sw = sb[2] - sb[0]
-                    mx = WIDTH - MARGIN_X - tw + ww2 + sw
-                else:
-                    mx = WIDTH - MARGIN_X - tw
-                draw.text((mx, y), w, fill=MARKER_COLOR, font=font)
-        return
-
     total_word_w = sum(widths)
-    num_gaps = len(words) - 1
-    total_space = max_width - total_word_w
-    gap = total_space / num_gaps if num_gaps > 0 else 0
+    space_w = measure_word(font, " ")
+
+    if is_last or len(words) == 1:
+        gap = space_w
+    else:
+        num_gaps = len(words) - 1
+        total_space = max_width - total_word_w
+        gap = total_space / num_gaps if num_gaps > 0 else 0
 
     x = WIDTH - MARGIN_X
-    for i, (w, ww, is_marker) in enumerate(word_items):
+
+    for w, ww, is_marker in word_items:
         x -= ww
         color = MARKER_COLOR if is_marker else TEXT_COLOR
         draw.text((x, y), w, fill=color, font=font)
@@ -172,8 +183,8 @@ def render_tall_image(elements, fonts):
     for elem in elements:
         if elem[0] == "verse":
             text, vnum = elem[1], elem[2]
-            marker = f"\uFD3F{to_arabic_numeral(vnum)}\uFD3E"
-            verse_words = text.split()
+            marker = AYAH_MARKER + to_arabic_numeral(vnum)
+            verse_words = attach_waqf_marks(text.split())
             verse_words.append(marker)
             all_words.extend(verse_words)
 
@@ -183,14 +194,17 @@ def render_tall_image(elements, fonts):
     basmalah_h = 0
     for elem in elements:
         if elem[0] == "surah_header":
-            header_h += 28 + FONT_SIZE_SURAH + 16 + 40
+            header_h += 2 * 35 + 60 + 40
         elif elem[0] == "basmalah":
-            basmalah_h += FONT_SIZE_BASMALAH + 60
+            basmalah_h += FONT_SIZE_BASMALAH + 115
 
     total_height = TOP_PAD + header_h + basmalah_h + len(lines) * LINE_H + BOT_PAD
 
     img = Image.new("RGB", (WIDTH, total_height), BG_COLOR)
     draw = ImageDraw.Draw(img)
+
+    draw_ornament_line(draw, 16, WIDTH, DARK_GOLD, 1, 350)
+    draw_ornament_line(draw, total_height - 16, WIDTH, DARK_GOLD, 1, 350)
 
     y = TOP_PAD
     for elem in elements:
@@ -199,9 +213,19 @@ def render_tall_image(elements, fonts):
         elif elem[0] == "basmalah":
             y = draw_basmalah(draw, y, font_basm)
 
+    LINE_RULE_COLOR = (40, 35, 55)
+
     for i, line_items in enumerate(lines):
         is_last = (i == len(lines) - 1)
         draw_justified_line(draw, y, line_items, font_quran, TEXT_WIDTH, is_last)
+
+        if not is_last:
+            line_text = " ".join(w for w, _, _ in line_items)
+            tb = font_quran.getbbox(line_text)
+            rule_y = y + tb[3] + 5
+            draw.line([(MARGIN_X, rule_y), (WIDTH - MARGIN_X, rule_y)],
+                       fill=LINE_RULE_COLOR, width=3)
+
         y += LINE_H
 
     return np.array(img)
@@ -213,14 +237,14 @@ def main():
         f"https://api.alquran.cloud/v1/surah/{surah_num}/quran-uthmani").read())
     surah = data["data"]
 
-    font_quran = ImageFont.truetype(FONT_PATH, FONT_SIZE)
-    font_ar = ImageFont.truetype(FONT_AMIRI_BOLD, FONT_SIZE_SURAH)
-    font_basm = ImageFont.truetype(FONT_PATH, FONT_SIZE_BASMALAH)
+    font_quran = ImageFont.truetype(FONT_PATH, FONT_SIZE, layout_engine=Layout.RAQM)
+    font_ar = ImageFont.truetype(FONT_AMIRI_BOLD, FONT_SIZE_SURAH, layout_engine=Layout.RAQM)
+    font_basm = ImageFont.truetype(FONT_PATH, FONT_SIZE_BASMALAH, layout_engine=Layout.RAQM)
     fonts = (font_quran, font_ar, font_basm)
 
     elements = [("surah_header", surah["name"])]
 
-    first_ayah = clean_text(surah["ayahs"][0]["text"].strip("\ufeff"))
+    first_ayah = surah["ayahs"][0]["text"].strip("\ufeff")
     has_bismillah = first_ayah.split()[0] == BASMALAH_WORD
 
     if has_bismillah:
@@ -228,7 +252,7 @@ def main():
 
     display_num = 1
     for v in surah["ayahs"][:30]:
-        txt = clean_text(v["text"].strip("\ufeff"))
+        txt = v["text"].strip("\ufeff")
         if v["numberInSurah"] == 1 and has_bismillah:
             txt = strip_bismillah(txt)
             if not txt:
