@@ -88,7 +88,7 @@ def _layout_centered(elements, fonts):
             y += FONT_SIZE_BASMALAH + 20 + 36
         elif kind == "verse":
             text, vnum = elem[1], elem[2]
-            marker = make_verse_marker(vnum, style="ornate")
+            marker = make_verse_marker(vnum, style="circle")
             words = text.split()
             words.append(marker)
             all_words.extend(words)
@@ -116,7 +116,7 @@ def _layout_justified(elements, fonts):
             y += FONT_SIZE_BASMALAH_JUSTIFIED + 20 + 36
         elif kind == "verse":
             text, vnum = elem[1], elem[2]
-            marker = make_verse_marker(vnum, style="ornate")
+            marker = make_verse_marker(vnum, style="circle")
             verse_words = attach_waqf_marks(text.split())
             verse_words.append(marker)
             all_words.extend(verse_words)

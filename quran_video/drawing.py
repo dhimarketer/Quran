@@ -70,6 +70,19 @@ def draw_basmalah_justified(draw, y, font_basm):
     return rule_y + 36
 
 
+def _draw_circle_around_marker(draw, x, y, text, font, color):
+    """Draw a circle around a standalone Arabic numeral verse marker."""
+    bbox = font.getbbox(text)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    pad = 4
+    r = max(tw, th) // 2 + pad
+    cx = x + tw // 2
+    cy = y + th // 2 + 1
+    draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)], outline=color, width=2)
+    draw.text((x, y), text, fill=color, font=font)
+
+
 def draw_justified_line(draw, y, word_items, font, max_width, is_last):
     if not word_items:
         return
@@ -84,8 +97,12 @@ def draw_justified_line(draw, y, word_items, font, max_width, is_last):
     x = WIDTH - MARGIN_X_JUSTIFIED
     for w, ww, is_marker in word_items:
         x -= ww
-        color = VERSE_MARKER_COLOR if is_marker else TEXT_COLOR
-        draw.text((x, y), w, fill=color, font=font)
+        if is_marker:
+            stripped = w.strip()
+            if stripped:
+                _draw_circle_around_marker(draw, x, y, stripped, font, VERSE_MARKER_COLOR)
+        else:
+            draw.text((x, y), w, fill=TEXT_COLOR, font=font)
         x -= gap
 
 
@@ -100,8 +117,12 @@ def draw_centered_continuous_line(draw, y, word_items, font, max_width, is_last)
         total_w = total_word_w + num_gaps * space_w
         x = (WIDTH - total_w) // 2
         for w, ww, is_marker in word_items:
-            color = VERSE_MARKER_COLOR if is_marker else TEXT_COLOR
-            draw.text((x, y), w, fill=color, font=font)
+            if is_marker:
+                stripped = w.strip()
+                if stripped:
+                    _draw_circle_around_marker(draw, x, y, stripped, font, VERSE_MARKER_COLOR)
+            else:
+                draw.text((x, y), w, fill=TEXT_COLOR, font=font)
             x += ww + space_w
     else:
         total_space = max_width - total_word_w
@@ -109,6 +130,10 @@ def draw_centered_continuous_line(draw, y, word_items, font, max_width, is_last)
         x = WIDTH - MARGIN_X
         for w, ww, is_marker in word_items:
             x -= ww
-            color = VERSE_MARKER_COLOR if is_marker else TEXT_COLOR
-            draw.text((x, y), w, fill=color, font=font)
+            if is_marker:
+                stripped = w.strip()
+                if stripped:
+                    _draw_circle_around_marker(draw, x, y, stripped, font, VERSE_MARKER_COLOR)
+            else:
+                draw.text((x, y), w, fill=TEXT_COLOR, font=font)
             x -= gap

@@ -27,9 +27,26 @@ def strip_bismillah(text):
 def make_verse_marker(vnum, style="ornate"):
     if style == "ornate":
         return f" {VERSE_MARKER_OPEN}{to_arabic_numeral(vnum)}{VERSE_MARKER_CLOSE}"
+    if style == "circle":
+        return "  " + to_arabic_numeral(vnum)  # extra space for detection
     if style == "arabic_indicate":
         return AYAH_MARKER_CHAR + to_arabic_numeral(vnum)
     return f"\u27eb{to_arabic_numeral(vnum)}\u27ea"
+
+
+def is_arabic_digit(c):
+    return "\u0660" <= c <= "\u0669"
+
+
+def is_verse_marker(word):
+    """Detect if word is a standalone Arabic numeral (circle marker)."""
+    stripped = word.strip()
+    if not stripped:
+        return False
+    # allow one leading optional U+06DD
+    if stripped[0] == "\u06DD":
+        stripped = stripped[1:]
+    return all(is_arabic_digit(c) for c in stripped)
 
 
 def measure_word(font, word):
@@ -57,7 +74,7 @@ def center_wrap_text(text, font, max_width):
 def build_justified_lines(all_words, font, max_width):
     word_data = []
     for w in all_words:
-        is_marker = w.startswith(AYAH_MARKER_CHAR)
+        is_marker = is_verse_marker(w)
         bbox = font.getbbox(w)
         ww = bbox[2] - bbox[0]
         word_data.append((w, ww, is_marker))
@@ -88,7 +105,8 @@ def build_justified_lines(all_words, font, max_width):
 def build_continuous_lines(all_words, font, max_width, style="ornate"):
     word_data = []
     for w in all_words:
-        is_marker = (style == "arabic_indicate" and w.startswith(AYAH_MARKER_CHAR)) or \
+        is_marker = is_verse_marker(w) or \
+                    (style == "arabic_indicate" and w.startswith(AYAH_MARKER_CHAR)) or \
                     (style == "ornate" and (w.startswith(VERSE_MARKER_OPEN) or w.startswith(" " + VERSE_MARKER_OPEN)))
         bbox = font.getbbox(w)
         ww = bbox[2] - bbox[0]
