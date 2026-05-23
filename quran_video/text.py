@@ -7,10 +7,47 @@ def to_arabic_numeral(n):
     return "".join(chr(0x0660 + int(c)) if c.isdigit() else c for c in str(n))
 
 
+WAQF_CATEGORIES = {"Mn", "Lm"}
+
+WAQF_SYMBOLS = {"So"}
+
+LARGE_WAQF_RANGES = [
+    (0x06D6, 0x06DC),
+    (0x06DF, 0x06E3),
+    (0x06E8, 0x06EB),
+    (0x06ED, 0x06ED),
+]
+
+def _is_large_waqf(c):
+    if unicodedata.category(c) != "Mn" or ord(c) < 0x0600:
+        return False
+    for lo, hi in LARGE_WAQF_RANGES:
+        if lo <= ord(c) <= hi:
+            return True
+    return False
+
+def _is_waqf_word(w):
+    if not w:
+        return False
+    return all(
+        unicodedata.category(c) in WAQF_CATEGORIES and ord(c) >= 0x0600
+        or c == "\u0640"
+        for c in w
+    )
+
+
+def strip_waqf_symbols(text):
+    return "".join(
+        c for c in text
+        if not (unicodedata.category(c) in WAQF_SYMBOLS and ord(c) >= 0x0600)
+        and not _is_large_waqf(c)
+    )
+
+
 def attach_waqf_marks(words):
     result = []
     for w in words:
-        if result and all(unicodedata.category(c) == "Mn" for c in w):
+        if result and _is_waqf_word(w):
             result[-1] += w
         else:
             result.append(w)
@@ -28,7 +65,7 @@ def make_verse_marker(vnum, style="ornate"):
     if style == "ornate":
         return f" {VERSE_MARKER_OPEN}{to_arabic_numeral(vnum)}{VERSE_MARKER_CLOSE}"
     if style == "circle":
-        return "  " + to_arabic_numeral(vnum)  # extra space for detection
+        return "  " + to_arabic_numeral(vnum)
     if style == "arabic_indicate":
         return AYAH_MARKER_CHAR + to_arabic_numeral(vnum)
     return f"\u27eb{to_arabic_numeral(vnum)}\u27ea"

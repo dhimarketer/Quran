@@ -12,7 +12,7 @@ from .config import (
     TOP_PAD, BOT_PAD, BASMALAH_WORD,
 )
 from .text import (
-    to_arabic_numeral, attach_waqf_marks, strip_bismillah,
+    to_arabic_numeral, attach_waqf_marks, strip_bismillah, strip_waqf_symbols,
     make_verse_marker, center_wrap_text, build_justified_lines,
     build_continuous_lines,
 )
@@ -44,6 +44,7 @@ def _build_elements_from_surah(surah, ayahs_slice=None):
     display_num = 1
     for v in ayahs:
         txt = v["text"].strip("\ufeff")
+        txt = strip_waqf_symbols(txt)
         if v["numberInSurah"] == 1 and has_bismillah:
             txt = strip_bismillah(txt)
             if not txt:
@@ -64,7 +65,7 @@ def _build_elements_from_juz(juz_data):
             elements.append(("surah_header", ayah["surah"]["name"], ayah["surah"]["englishName"]))
             elements.append(("basmalah",))
             last_surah = surah_id
-        elements.append(("verse", ayah["text"], ayah["numberInSurah"], ayah["number"]))
+        elements.append(("verse", strip_waqf_symbols(ayah["text"]), ayah["numberInSurah"], ayah["number"]))
     return elements
 
 
@@ -89,11 +90,11 @@ def _layout_centered(elements, fonts):
         elif kind == "verse":
             text, vnum = elem[1], elem[2]
             marker = make_verse_marker(vnum, style="circle")
-            words = text.split()
+            words = attach_waqf_marks(text.split())
             words.append(marker)
             all_words.extend(words)
 
-    lines = build_continuous_lines(all_words, font_quran, max_w, style="ornate")
+    lines = build_continuous_lines(all_words, font_quran, max_w, style="circle")
 
     total_height = y + len(lines) * LINE_H_CENTERED + BOT_PAD
     return header_items, lines, total_height, y
