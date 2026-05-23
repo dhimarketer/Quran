@@ -143,13 +143,15 @@ def _draw_centered(header_items, lines, total_height, text_start_y, fonts):
         elif item.kind == "basmalah":
             draw_basmalah_centered(draw, item.y, font_basmalah)
 
+    ascent, descent = font_quran.getmetrics()
+    v_offset = (LINE_H_CENTERED - (ascent + descent)) // 2
+
     y = text_start_y
     for i, line_items in enumerate(lines):
         is_last = (i == len(lines) - 1)
-        text_y = y + (LINE_H_CENTERED - FONT_SIZE_QURAN) // 2
-        draw_centered_continuous_line(draw, text_y, line_items, font_quran, max_w, is_last)
+        draw_centered_continuous_line(draw, y + v_offset, line_items, font_quran, max_w, is_last)
         if not is_last:
-            rule_y = y + LINE_H_CENTERED + 2
+            rule_y = y + LINE_H_CENTERED
             draw.line([(MARGIN_X, rule_y), (WIDTH - MARGIN_X, rule_y)],
                       fill=LINE_RULE_COLOR, width=2)
         y += LINE_H_CENTERED
@@ -172,13 +174,15 @@ def _draw_justified(header_items, lines, total_height, text_start_y, fonts):
         elif item.kind == "basmalah_j":
             draw_basmalah_justified(draw, item.y, font_basm)
 
+    ascent, descent = font_quran.getmetrics()
+    v_offset = (LINE_H_JUSTIFIED - (ascent + descent)) // 2
+
     y = text_start_y
     for i, line_items in enumerate(lines):
         is_last = (i == len(lines) - 1)
-        text_y = y + (LINE_H_JUSTIFIED - FONT_SIZE_JUSTIFIED) // 2
-        draw_justified_line(draw, text_y, line_items, font_quran, TEXT_WIDTH_JUSTIFIED, is_last)
+        draw_justified_line(draw, y + v_offset, line_items, font_quran, TEXT_WIDTH_JUSTIFIED, is_last)
         if not is_last:
-            rule_y = y + LINE_H_JUSTIFIED + 2
+            rule_y = y + LINE_H_JUSTIFIED
             draw.line([(MARGIN_X_JUSTIFIED, rule_y), (WIDTH - MARGIN_X_JUSTIFIED, rule_y)],
                       fill=LINE_RULE_COLOR, width=2)
         y += LINE_H_JUSTIFIED

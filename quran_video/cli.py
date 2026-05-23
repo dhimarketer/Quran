@@ -48,8 +48,7 @@ def generate_surah_video(surah_num, layout, ayahs_range=None, output_name=None, 
     if output_name is None:
         suffix = f"_{layout}"
         if ayahs_range:
-            start, end = ayahs_range
-            suffix += f"_{start+1}-{end}"
+            suffix += f"_{ayahs_range.start+1}-{ayahs_range.stop}"
         output_name = f"surah_{surah_num}{suffix}.mp4"
     output_path = os.path.join(OUTPUT_DIR, output_name)
 
