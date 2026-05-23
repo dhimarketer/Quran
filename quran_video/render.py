@@ -116,7 +116,7 @@ def _layout_justified(elements, fonts):
             y += FONT_SIZE_BASMALAH_JUSTIFIED + 20 + 36
         elif kind == "verse":
             text, vnum = elem[1], elem[2]
-            marker = make_verse_marker(vnum, style="arabic_indicate")
+            marker = make_verse_marker(vnum, style="ornate")
             verse_words = attach_waqf_marks(text.split())
             verse_words.append(marker)
             all_words.extend(verse_words)
@@ -146,11 +146,12 @@ def _draw_centered(header_items, lines, total_height, text_start_y, fonts):
     y = text_start_y
     for i, line_items in enumerate(lines):
         is_last = (i == len(lines) - 1)
-        draw_centered_continuous_line(draw, y, line_items, font_quran, max_w, is_last)
+        text_y = y + (LINE_H_CENTERED - FONT_SIZE_QURAN) // 2
+        draw_centered_continuous_line(draw, text_y, line_items, font_quran, max_w, is_last)
         if not is_last:
-            rule_y = y + LINE_H_CENTERED // 2
+            rule_y = y + LINE_H_CENTERED + 2
             draw.line([(MARGIN_X, rule_y), (WIDTH - MARGIN_X, rule_y)],
-                      fill=LINE_RULE_COLOR, width=3)
+                      fill=LINE_RULE_COLOR, width=2)
         y += LINE_H_CENTERED
 
     return np.array(img)
@@ -174,11 +175,12 @@ def _draw_justified(header_items, lines, total_height, text_start_y, fonts):
     y = text_start_y
     for i, line_items in enumerate(lines):
         is_last = (i == len(lines) - 1)
-        draw_justified_line(draw, y, line_items, font_quran, TEXT_WIDTH_JUSTIFIED, is_last)
+        text_y = y + (LINE_H_JUSTIFIED - FONT_SIZE_JUSTIFIED) // 2
+        draw_justified_line(draw, text_y, line_items, font_quran, TEXT_WIDTH_JUSTIFIED, is_last)
         if not is_last:
-            rule_y = y + LINE_H_JUSTIFIED // 2
+            rule_y = y + LINE_H_JUSTIFIED + 2
             draw.line([(MARGIN_X_JUSTIFIED, rule_y), (WIDTH - MARGIN_X_JUSTIFIED, rule_y)],
-                      fill=LINE_RULE_COLOR, width=3)
+                      fill=LINE_RULE_COLOR, width=2)
         y += LINE_H_JUSTIFIED
 
     return np.array(img)

@@ -89,7 +89,7 @@ def build_continuous_lines(all_words, font, max_width, style="ornate"):
     word_data = []
     for w in all_words:
         is_marker = (style == "arabic_indicate" and w.startswith(AYAH_MARKER_CHAR)) or \
-                    (style == "ornate" and w.startswith(VERSE_MARKER_OPEN))
+                    (style == "ornate" and (w.startswith(VERSE_MARKER_OPEN) or w.startswith(" " + VERSE_MARKER_OPEN)))
         bbox = font.getbbox(w)
         ww = bbox[2] - bbox[0]
         word_data.append((w, ww, is_marker))
