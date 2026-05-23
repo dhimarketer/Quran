@@ -9,22 +9,14 @@ def to_arabic_numeral(n):
 
 WAQF_CATEGORIES = {"Mn", "Lm"}
 
-WAQF_SYMBOLS = {"So"}
+WAQF_NORMALIZE_MAP = {
+    "\u06ED": "\u06DA",  # small low meem (iqlab) -> small high jeem (permissible stop)
+}
 
-LARGE_WAQF_RANGES = [
-    (0x06D6, 0x06DC),
-    (0x06DF, 0x06E3),
-    (0x06E8, 0x06EB),
-    (0x06ED, 0x06ED),
-]
-
-def _is_large_waqf(c):
-    if unicodedata.category(c) != "Mn" or ord(c) < 0x0600:
-        return False
-    for lo, hi in LARGE_WAQF_RANGES:
-        if lo <= ord(c) <= hi:
-            return True
-    return False
+def normalize_waqf(text):
+    for old, new in WAQF_NORMALIZE_MAP.items():
+        text = text.replace(old, new)
+    return text
 
 def _is_waqf_word(w):
     if not w:
@@ -33,14 +25,6 @@ def _is_waqf_word(w):
         unicodedata.category(c) in WAQF_CATEGORIES and ord(c) >= 0x0600
         or c == "\u0640"
         for c in w
-    )
-
-
-def strip_waqf_symbols(text):
-    return "".join(
-        c for c in text
-        if not (unicodedata.category(c) in WAQF_SYMBOLS and ord(c) >= 0x0600)
-        and not _is_large_waqf(c)
     )
 
 
