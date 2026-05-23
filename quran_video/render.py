@@ -12,7 +12,7 @@ from .config import (
     TOP_PAD, BOT_PAD, BASMALAH_WORD,
 )
 from .text import (
-    to_arabic_numeral, attach_waqf_marks, strip_bismillah, normalize_waqf,
+    to_arabic_numeral, attach_waqf_marks, strip_bismillah, normalize_arabic,
     make_verse_marker, center_wrap_text, build_justified_lines,
     build_continuous_lines,
 )
@@ -44,7 +44,7 @@ def _build_elements_from_surah(surah, ayahs_slice=None):
     display_num = 1
     for v in ayahs:
         txt = v["text"].strip("\ufeff")
-        txt = normalize_waqf(txt)
+        txt = normalize_arabic(txt)
         if v["numberInSurah"] == 1 and has_bismillah:
             txt = strip_bismillah(txt)
             if not txt:
@@ -65,7 +65,7 @@ def _build_elements_from_juz(juz_data):
             elements.append(("surah_header", ayah["surah"]["name"], ayah["surah"]["englishName"]))
             elements.append(("basmalah",))
             last_surah = surah_id
-        elements.append(("verse", normalize_waqf(ayah["text"]), ayah["numberInSurah"], ayah["number"]))
+        elements.append(("verse", normalize_arabic(ayah["text"]), ayah["numberInSurah"], ayah["number"]))
     return elements
 
 

@@ -9,12 +9,20 @@ def to_arabic_numeral(n):
 
 WAQF_CATEGORIES = {"Mn", "Lm"}
 
-WAQF_NORMALIZE_MAP = {
-    "\u06ED": "\u06DA",  # small low meem (iqlab) -> small high jeem (permissible stop)
+ARABIC_NORMALIZE_MAP = {
+    "\u06ED": "\u06DA",  # small low meem -> small high jeem
+    "\u06CC": "\u064A",  # Farsi yeh -> Arabic yeh (KFGQPC has no Farsi glyph)
+    "\u06DF": "\u06DA",  # small high rounded zero -> small high jeem
+    "\u08F0": "\u064B",  # open fathatan -> standard fathatan
+    "\u08F1": "\u064C",  # open dammatan -> standard dammatan
+    "\u08F2": "\u064D",  # open kasratan -> standard kasratan
+    "\u06E6": "\u064A",  # small yeh -> Arabic yeh
+    "\u200A": " ",       # hair space -> regular space
+    "\u2060": "",        # word joiner -> remove
 }
 
-def normalize_waqf(text):
-    for old, new in WAQF_NORMALIZE_MAP.items():
+def normalize_arabic(text):
+    for old, new in ARABIC_NORMALIZE_MAP.items():
         text = text.replace(old, new)
     return text
 
