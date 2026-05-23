@@ -23,15 +23,6 @@ from .drawing import (
 )
 
 
-class LayoutItem:
-    __slots__ = ("kind", "data", "y")
-
-    def __init__(self, kind, data, y):
-        self.kind = kind
-        self.data = data
-        self.y = y
-
-
 def _build_elements_from_surah(surah, ayahs_slice=None):
     elements = []
     elements.append(("surah_header", surah["name"], surah.get("englishName", "")))
@@ -73,62 +64,122 @@ def _layout_centered(elements, fonts):
     font_quran, font_bold, font_en, font_basmalah = fonts
     max_w = WIDTH - 2 * MARGIN_X
 
-    header_items = []
+    header_h = 36 + 28 + FONT_SIZE_SURAH_AR + 12 + FONT_SIZE_SURAH_EN + 16 + 36
+    basmalah_h = FONT_SIZE_BASMALAH + 20 + 36
+
+    surah_blocks = []
     y = TOP_PAD
 
-    all_words = []
+    current_header_data = None
+    current_header_y = 0
+    current_basmalah_y = 0
+    current_verse_words = []
 
     for elem in elements:
         kind = elem[0]
         if kind == "surah_header":
-            header_h = 36 + 28 + FONT_SIZE_SURAH_AR + 12 + FONT_SIZE_SURAH_EN + 16 + 36
-            header_items.append(LayoutItem("surah_header", elem[1:], y))
+            if current_verse_words:
+                lines = build_continuous_lines(current_verse_words, font_quran, max_w, style="circle")
+                text_start_y = current_basmalah_y + basmalah_h
+                surah_blocks.append({
+                    "header_data": current_header_data,
+                    "header_y": current_header_y,
+                    "basmalah_y": current_basmalah_y,
+                    "lines": lines,
+                    "text_start_y": text_start_y,
+                })
+                y = text_start_y + len(lines) * LINE_H_CENTERED
+
+            current_header_data = elem[1:]
+            current_header_y = y
             y += header_h
+            current_basmalah_y = y
+            current_verse_words = []
         elif kind == "basmalah":
-            header_items.append(LayoutItem("basmalah", None, y))
-            y += FONT_SIZE_BASMALAH + 20 + 36
+            y += basmalah_h
         elif kind == "verse":
             text, vnum = elem[1], elem[2]
             marker = make_verse_marker(vnum, style="circle")
             words = attach_waqf_marks(text.split())
             words.append(marker)
-            all_words.extend(words)
+            current_verse_words.extend(words)
 
-    lines = build_continuous_lines(all_words, font_quran, max_w, style="circle")
+    if current_verse_words:
+        lines = build_continuous_lines(current_verse_words, font_quran, max_w, style="circle")
+        text_start_y = current_basmalah_y + basmalah_h
+        surah_blocks.append({
+            "header_data": current_header_data,
+            "header_y": current_header_y,
+            "basmalah_y": current_basmalah_y,
+            "lines": lines,
+            "text_start_y": text_start_y,
+        })
+        y = text_start_y + len(lines) * LINE_H_CENTERED
 
-    total_height = y + len(lines) * LINE_H_CENTERED + BOT_PAD
-    return header_items, lines, total_height, y
+    total_height = y + BOT_PAD
+    return surah_blocks, total_height
 
 
 def _layout_justified(elements, fonts):
     font_quran, font_ar, font_basm = fonts
 
-    all_words = []
-    header_items = []
+    header_h = 2 * 35 + 60 + 40
+    basmalah_h = FONT_SIZE_BASMALAH_JUSTIFIED + 20 + 36
+
+    surah_blocks = []
     y = TOP_PAD
+
+    current_header_data = None
+    current_header_y = 0
+    current_basmalah_y = 0
+    current_verse_words = []
 
     for elem in elements:
         kind = elem[0]
         if kind == "surah_header":
-            header_items.append(LayoutItem("surah_header_j", elem[1:], y))
-            y += 2 * 35 + 60 + 40
+            if current_verse_words:
+                lines = build_justified_lines(current_verse_words, font_quran, TEXT_WIDTH_JUSTIFIED)
+                text_start_y = current_basmalah_y + basmalah_h
+                surah_blocks.append({
+                    "header_data": current_header_data,
+                    "header_y": current_header_y,
+                    "basmalah_y": current_basmalah_y,
+                    "lines": lines,
+                    "text_start_y": text_start_y,
+                })
+                y = text_start_y + len(lines) * LINE_H_JUSTIFIED
+
+            current_header_data = elem[1:]
+            current_header_y = y
+            y += header_h
+            current_basmalah_y = y
+            current_verse_words = []
         elif kind == "basmalah":
-            header_items.append(LayoutItem("basmalah_j", None, y))
-            y += FONT_SIZE_BASMALAH_JUSTIFIED + 20 + 36
+            y += basmalah_h
         elif kind == "verse":
             text, vnum = elem[1], elem[2]
             marker = make_verse_marker(vnum, style="circle")
             verse_words = attach_waqf_marks(text.split())
             verse_words.append(marker)
-            all_words.extend(verse_words)
+            current_verse_words.extend(verse_words)
 
-    lines = build_justified_lines(all_words, font_quran, TEXT_WIDTH_JUSTIFIED)
+    if current_verse_words:
+        lines = build_justified_lines(current_verse_words, font_quran, TEXT_WIDTH_JUSTIFIED)
+        text_start_y = current_basmalah_y + basmalah_h
+        surah_blocks.append({
+            "header_data": current_header_data,
+            "header_y": current_header_y,
+            "basmalah_y": current_basmalah_y,
+            "lines": lines,
+            "text_start_y": text_start_y,
+        })
+        y = text_start_y + len(lines) * LINE_H_JUSTIFIED
 
-    total_height = y + len(lines) * LINE_H_JUSTIFIED + BOT_PAD
-    return header_items, lines, total_height, y
+    total_height = y + BOT_PAD
+    return surah_blocks, total_height
 
 
-def _draw_centered(header_items, lines, total_height, text_start_y, fonts):
+def _draw_centered(surah_blocks, total_height, fonts):
     font_quran, font_bold, font_en, font_basmalah = fonts
     max_w = WIDTH - 2 * MARGIN_X
 
@@ -137,30 +188,28 @@ def _draw_centered(header_items, lines, total_height, text_start_y, fonts):
     draw_ornament_line(draw, 16, WIDTH, DARK_GOLD, 1, 350)
     draw_ornament_line(draw, total_height - 16, WIDTH, DARK_GOLD, 1, 350)
 
-    for item in header_items:
-        if item.kind == "surah_header":
-            name_ar, name_en = item.data
-            draw_surah_header_centered(draw, item.y, name_ar, name_en or "", font_bold, font_en)
-        elif item.kind == "basmalah":
-            draw_basmalah_centered(draw, item.y, font_basmalah)
-
     ascent, descent = font_quran.getmetrics()
     v_offset = (LINE_H_CENTERED - (ascent + descent)) // 2
 
-    y = text_start_y
-    for i, line_items in enumerate(lines):
-        is_last = (i == len(lines) - 1)
-        draw_centered_continuous_line(draw, y + v_offset, line_items, font_quran, max_w, is_last)
-        if not is_last:
-            rule_y = y + LINE_H_CENTERED
-            draw.line([(MARGIN_X, rule_y), (WIDTH - MARGIN_X, rule_y)],
-                      fill=LINE_RULE_COLOR, width=2)
-        y += LINE_H_CENTERED
+    for block in surah_blocks:
+        name_ar, name_en = block["header_data"]
+        draw_surah_header_centered(draw, block["header_y"], name_ar, name_en or "", font_bold, font_en)
+        draw_basmalah_centered(draw, block["basmalah_y"], font_basmalah)
+
+        y = block["text_start_y"]
+        for i, line_items in enumerate(block["lines"]):
+            is_last = (i == len(block["lines"]) - 1)
+            draw_centered_continuous_line(draw, y + v_offset, line_items, font_quran, max_w, is_last)
+            if not is_last:
+                rule_y = y + LINE_H_CENTERED
+                draw.line([(MARGIN_X, rule_y), (WIDTH - MARGIN_X, rule_y)],
+                          fill=LINE_RULE_COLOR, width=2)
+            y += LINE_H_CENTERED
 
     return np.array(img)
 
 
-def _draw_justified(header_items, lines, total_height, text_start_y, fonts):
+def _draw_justified(surah_blocks, total_height, fonts):
     font_quran, font_ar, font_basm = fonts
 
     img = Image.new("RGB", (WIDTH, total_height), BG_COLOR_CENTERED)
@@ -168,35 +217,33 @@ def _draw_justified(header_items, lines, total_height, text_start_y, fonts):
     draw_ornament_line(draw, 16, WIDTH, DARK_GOLD, 1, 350)
     draw_ornament_line(draw, total_height - 16, WIDTH, DARK_GOLD, 1, 350)
 
-    for item in header_items:
-        if item.kind == "surah_header_j":
-            name_ar = item.data[0]
-            draw_surah_header_justified(draw, item.y, name_ar, font_ar)
-        elif item.kind == "basmalah_j":
-            draw_basmalah_justified(draw, item.y, font_basm)
-
     ascent, descent = font_quran.getmetrics()
     v_offset = (LINE_H_JUSTIFIED - (ascent + descent)) // 2
 
-    y = text_start_y
-    for i, line_items in enumerate(lines):
-        is_last = (i == len(lines) - 1)
-        draw_justified_line(draw, y + v_offset, line_items, font_quran, TEXT_WIDTH_JUSTIFIED, is_last)
-        if not is_last:
-            rule_y = y + LINE_H_JUSTIFIED
-            draw.line([(MARGIN_X_JUSTIFIED, rule_y), (WIDTH - MARGIN_X_JUSTIFIED, rule_y)],
-                      fill=LINE_RULE_COLOR, width=2)
-        y += LINE_H_JUSTIFIED
+    for block in surah_blocks:
+        name_ar = block["header_data"][0]
+        draw_surah_header_justified(draw, block["header_y"], name_ar, font_ar)
+        draw_basmalah_justified(draw, block["basmalah_y"], font_basm)
+
+        y = block["text_start_y"]
+        for i, line_items in enumerate(block["lines"]):
+            is_last = (i == len(block["lines"]) - 1)
+            draw_justified_line(draw, y + v_offset, line_items, font_quran, TEXT_WIDTH_JUSTIFIED, is_last)
+            if not is_last:
+                rule_y = y + LINE_H_JUSTIFIED
+                draw.line([(MARGIN_X_JUSTIFIED, rule_y), (WIDTH - MARGIN_X_JUSTIFIED, rule_y)],
+                          fill=LINE_RULE_COLOR, width=2)
+            y += LINE_H_JUSTIFIED
 
     return np.array(img)
 
 
 def render(elements, layout="centered", fonts=None):
     if layout == "justified":
-        header_items, lines, total_height, text_start_y = _layout_justified(elements, fonts)
-        return _draw_justified(header_items, lines, total_height, text_start_y, fonts)
-    header_items, lines, total_height, text_start_y = _layout_centered(elements, fonts)
-    return _draw_centered(header_items, lines, total_height, text_start_y, fonts)
+        surah_blocks, total_height = _layout_justified(elements, fonts)
+        return _draw_justified(surah_blocks, total_height, fonts)
+    surah_blocks, total_height = _layout_centered(elements, fonts)
+    return _draw_centered(surah_blocks, total_height, fonts)
 
 
 def load_fonts(layout="centered"):
