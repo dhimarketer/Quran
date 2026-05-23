@@ -50,13 +50,21 @@ def _build_elements_from_surah(surah, ayahs_slice=None):
 def _build_elements_from_juz(juz_data):
     elements = []
     last_surah = None
+    is_first_ayah_in_surah = False
     for ayah in juz_data["data"]["ayahs"]:
         surah_id = ayah["surah"]["number"]
         if surah_id != last_surah:
             elements.append(("surah_header", ayah["surah"]["name"], ayah["surah"]["englishName"]))
             elements.append(("basmalah",))
             last_surah = surah_id
-        elements.append(("verse", normalize_arabic(ayah["text"]), ayah["numberInSurah"], ayah["number"]))
+            is_first_ayah_in_surah = True
+        txt = normalize_arabic(ayah["text"])
+        if is_first_ayah_in_surah:
+            txt = strip_bismillah(txt)
+            is_first_ayah_in_surah = False
+            if not txt:
+                continue
+        elements.append(("verse", txt, ayah["numberInSurah"], ayah["number"]))
     return elements
 
 
