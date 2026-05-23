@@ -11,10 +11,23 @@ HEIGHT = 1080
 FPS = 24
 RATE_2X = 2.0
 
+# Font fallback: use KFGQPC if available, else NotoNaskhArabic
 FONT_KFGQPC = "/home/mine/.local/share/fonts/KFGQPCUthmanicScriptHAFS.otf"
+if not os.path.exists(FONT_KFGQPC):
+    FONT_KFGQPC = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
+
 FONT_AMIRI_QURAN = "/home/mine/.local/share/fonts/AmiriQuran.ttf"
+if not os.path.exists(FONT_AMIRI_QURAN):
+    FONT_AMIRI_QURAN = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
+
 FONT_AMIRI_BOLD = "/home/mine/.local/share/fonts/Amiri-Bold.ttf"
+if not os.path.exists(FONT_AMIRI_BOLD):
+    FONT_AMIRI_BOLD = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf"
+
 FONT_AMIRI_REG = "/home/mine/.local/share/fonts/Amiri-Regular.ttf"
+if not os.path.exists(FONT_AMIRI_REG):
+    FONT_AMIRI_REG = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
+
 FONT_NOTO = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
 FONT_NOTO_BOLD = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf"
 
