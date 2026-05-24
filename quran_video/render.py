@@ -19,14 +19,15 @@ from .text import (
 from .drawing import (
     draw_ornament_line, draw_surah_header_centered, draw_surah_header_justified,
     draw_basmalah_centered, draw_basmalah_justified, draw_justified_line,
-    draw_centered_continuous_line,
+    draw_centered_continuous_line, draw_juz_footer,
 )
 
 
 def _build_elements_from_surah(surah, ayahs_slice=None):
     elements = []
     elements.append(("surah_header", surah["name"], surah.get("englishName", "")))
-    elements.append(("basmalah",))
+    if surah.get("number") != 9:
+        elements.append(("basmalah",))
 
     first_ayah = surah["ayahs"][0]["text"].strip("\ufeff")
     has_bismillah = first_ayah.split()[0] == BASMALAH_WORD
@@ -51,11 +52,15 @@ def _build_elements_from_juz(juz_data):
     elements = []
     last_surah = None
     is_first_ayah_in_surah = False
+    last_ayah_global = 0
+    last_surah_name = ""
+    last_surah_num = 0
     for ayah in juz_data["data"]["ayahs"]:
         surah_id = ayah["surah"]["number"]
         if surah_id != last_surah:
             elements.append(("surah_header", ayah["surah"]["name"], ayah["surah"]["englishName"]))
-            elements.append(("basmalah",))
+            if surah_id != 9:
+                elements.append(("basmalah",))
             last_surah = surah_id
             is_first_ayah_in_surah = True
         txt = normalize_arabic(ayah["text"])
@@ -65,6 +70,12 @@ def _build_elements_from_juz(juz_data):
             if not txt:
                 continue
         elements.append(("verse", txt, ayah["numberInSurah"], ayah["number"]))
+        last_ayah_global = ayah["number"]
+        last_surah_name = ayah["surah"]["name"]
+        last_surah_num = ayah["surah"]["number"]
+
+    elements.append(("juz_footer", juz_data["data"]["number"], last_ayah_global,
+                     last_surah_name, last_surah_num))
     return elements
 
 
@@ -82,6 +93,7 @@ def _layout_centered(elements, fonts):
     current_header_y = 0
     current_basmalah_y = 0
     current_verse_words = []
+    footer_data = None
 
     for elem in elements:
         kind = elem[0]
@@ -111,6 +123,8 @@ def _layout_centered(elements, fonts):
             words = attach_waqf_marks(text.split())
             words.append(marker)
             current_verse_words.extend(words)
+        elif kind == "juz_footer":
+            footer_data = elem
 
     if current_verse_words:
         lines = build_continuous_lines(current_verse_words, font_quran, max_w, style="circle")
@@ -123,6 +137,15 @@ def _layout_centered(elements, fonts):
             "text_start_y": text_start_y,
         })
         y = text_start_y + len(lines) * LINE_H_CENTERED
+
+    if footer_data:
+        footer_h = 24 + FONT_SIZE_SURAH_EN + 12 + 28
+        surah_blocks.append({
+            "type": "footer",
+            "footer_data": footer_data[1:],
+            "footer_y": y,
+        })
+        y += footer_h
 
     total_height = y + BOT_PAD
     return surah_blocks, total_height
@@ -141,6 +164,7 @@ def _layout_justified(elements, fonts):
     current_header_y = 0
     current_basmalah_y = 0
     current_verse_words = []
+    footer_data = None
 
     for elem in elements:
         kind = elem[0]
@@ -170,6 +194,8 @@ def _layout_justified(elements, fonts):
             verse_words = attach_waqf_marks(text.split())
             verse_words.append(marker)
             current_verse_words.extend(verse_words)
+        elif kind == "juz_footer":
+            footer_data = elem
 
     if current_verse_words:
         lines = build_justified_lines(current_verse_words, font_quran, TEXT_WIDTH_JUSTIFIED)
@@ -182,6 +208,15 @@ def _layout_justified(elements, fonts):
             "text_start_y": text_start_y,
         })
         y = text_start_y + len(lines) * LINE_H_JUSTIFIED
+
+    if footer_data:
+        footer_h = 24 + FONT_SIZE_SURAH_EN + 12 + 28
+        surah_blocks.append({
+            "type": "footer",
+            "footer_data": footer_data[1:],
+            "footer_y": y,
+        })
+        y += footer_h
 
     total_height = y + BOT_PAD
     return surah_blocks, total_height
@@ -200,6 +235,10 @@ def _draw_centered(surah_blocks, total_height, fonts):
     v_offset = (LINE_H_CENTERED - (ascent + descent)) // 2
 
     for block in surah_blocks:
+        if block.get("type") == "footer":
+            draw_juz_footer(draw, block["footer_y"], *block["footer_data"], font_bold, font_en)
+            continue
+
         name_ar, name_en = block["header_data"]
         draw_surah_header_centered(draw, block["header_y"], name_ar, name_en or "", font_bold, font_en)
         draw_basmalah_centered(draw, block["basmalah_y"], font_basmalah)
@@ -229,6 +268,10 @@ def _draw_justified(surah_blocks, total_height, fonts):
     v_offset = (LINE_H_JUSTIFIED - (ascent + descent)) // 2
 
     for block in surah_blocks:
+        if block.get("type") == "footer":
+            draw_juz_footer(draw, block["footer_y"], *block["footer_data"], font_ar, font_basm)
+            continue
+
         name_ar = block["header_data"][0]
         draw_surah_header_justified(draw, block["header_y"], name_ar, font_ar)
         draw_basmalah_justified(draw, block["basmalah_y"], font_basm)

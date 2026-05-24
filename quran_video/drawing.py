@@ -7,6 +7,7 @@ from .config import (
     VERSE_MARKER_COLOR, LINE_RULE_COLOR,
     FONT_SIZE_BASMALAH, FONT_SIZE_SURAH_AR, FONT_SIZE_SURAH_EN,
     LINE_H_CENTERED, LINE_H_JUSTIFIED,
+    FONT_SIZE_QURAN,
 )
 
 
@@ -15,6 +16,23 @@ def draw_ornament_line(draw, y, width, color, thickness=1, length=250):
     draw.line([(cx - length, y), (cx - 6, y)], fill=color, width=thickness)
     draw.line([(cx + 6, y), (cx + length, y)], fill=color, width=thickness)
     draw.ellipse([(cx - 5, y - 4), (cx + 5, y + 4)], fill=color)
+
+
+def draw_juz_footer(draw, y, juz_num, last_ayah_global, last_surah_name, last_surah_num, font_ar, font_en):
+    cx = WIDTH // 2
+    FOOTER_LINE_LEN = 180
+
+    draw_ornament_line(draw, y, WIDTH, GOLD, 2, FOOTER_LINE_LEN)
+    y += 24
+
+    footer_text = f"Juz {juz_num}  \u2014  Verse {last_ayah_global}  \u2014  {last_surah_name} ({last_surah_num})"
+    bbox = font_en.getbbox(footer_text)
+    sw = bbox[2] - bbox[0]
+    draw.text((cx - sw // 2, y), footer_text, fill=GOLD, font=font_en)
+    y += FONT_SIZE_SURAH_EN + 12
+
+    draw_ornament_line(draw, y, WIDTH, GOLD, 2, FOOTER_LINE_LEN)
+    return y + 28
 
 
 def draw_surah_header_centered(draw, y, name_ar, name_en, font_ar, font_en):
