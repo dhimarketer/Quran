@@ -1,136 +1,417 @@
-import numpy as np
-from PIL import Image, ImageDraw
+"""
+Cairo-based drawing primitives for Quran video pages.
+
+Replaces the PIL ImageDraw module with Cairo vector graphics.
+Headers, basmalahs, ornament lines, and text all use Cairo/PangoCairo.
+"""
+import math
+
+import gi
+gi.require_version("Pango", "1.0")
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Pango, PangoCairo
+import cairo
 
 from .config import (
     WIDTH, HEIGHT, MARGIN_X, MARGIN_X_JUSTIFIED, TEXT_WIDTH_JUSTIFIED,
     BG_COLOR_CENTERED, TEXT_COLOR, GOLD, DARK_GOLD, BASMALAH_COLOR,
-    VERSE_MARKER_COLOR, LINE_RULE_COLOR,
-    FONT_SIZE_BASMALAH, FONT_SIZE_SURAH_AR, FONT_SIZE_SURAH_EN,
+    VERSE_MARKER_COLOR, WAQF_MARKER_COLOR, WAQF_FONT_SIZE, LINE_RULE_COLOR,
     LINE_H_CENTERED, LINE_H_JUSTIFIED,
-    FONT_SIZE_QURAN,
+    FONT_SIZE_QURAN, FONT_SIZE_JUSTIFIED,
+    FONT_SIZE_SURAH_AR, FONT_SIZE_SURAH_EN, FONT_SIZE_SURAH_JUSTIFIED,
+    FONT_SIZE_BASMALAH, FONT_SIZE_BASMALAH_JUSTIFIED,
 )
 
+BASMALAH_TEXT = (
+    "\u0628\u0650\u0633\u0652\u0645\u0650 "
+    "\u0627\u0644\u0644\u0651\u064e\u0647\u0650 "
+    "\u0627\u0644\u0631\u0651\u064e\u062d\u0652\u0645\u064e\u0670\u0646\u0650 "
+    "\u0627\u0644\u0631\u0651\u064e\u062d\u0650\u064a\u0645\u0650"
+)
 
-def draw_ornament_line(draw, y, width, color, thickness=1, length=250):
+_AMIRI_QURAN_FAMILY = "Amiri Quran"
+_AMIRI_BOLD_FAMILY = "Amiri"
+
+
+# ---------------------------------------------------------------------------
+# Colour helpers
+# ---------------------------------------------------------------------------
+
+def _cairo_rgb(rgb):
+    """8-bit (0-255) → 0.0-1.0 float."""
+    return (rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0)
+
+
+def _set_cairo_color(cr, rgb):
+    cr.set_source_rgb(rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0)
+
+
+# ---------------------------------------------------------------------------
+# Font helpers
+# ---------------------------------------------------------------------------
+
+def _make_pango_layout(cr, text, family, size, width_px=None, justify=False,
+                       alignment=Pango.Alignment.LEFT):
+    """Create a PangoLayout with sensible defaults for Arabic text."""
+    pctx = PangoCairo.create_context(cr)
+    fd = Pango.FontDescription.from_string(f"{family} {size}")
+    layout = Pango.Layout.new(pctx)
+    layout.set_font_description(fd)
+    layout.set_text(text)
+    layout.set_auto_dir(True)
+    if width_px is not None:
+        layout.set_width(Pango.units_from_double(width_px))
+    if justify:
+        layout.set_justify(True)
+    layout.set_alignment(alignment)
+    return layout
+
+
+def _pango_text_extents(layout):
+    """Return (width_px, height_px, ink_y, log_y) of a PangoLayout.
+
+    ink_y and log_y are the ink/logical offsets from the layout origin.
+    These are needed to correctly position text vertically.
+    """
+    ink, logical = layout.get_pixel_extents()
+    return logical.width, logical.height, ink.y, logical.y
+
+
+def _show_layout_at(cr, layout, x, y, v_center_height=None):
+    """Render a PangoLayout at (x, y) in the Cairo context.
+
+    (x, y) is the desired position for the ink (visible text) top.
+    PangoCairo.show_layout places the logical rectangle starting at
+    (x, y), so we adjust by -logical.y to align ink at y.
+
+    If v_center_height is given, the ink is centred vertically within
+    that many pixels (useful for headers/basmalahs).
+    """
+    ink, logical = layout.get_pixel_extents()
+    if v_center_height is not None:
+        v_offset = (v_center_height - ink.height) // 2
+    else:
+        v_offset = 0
+    render_y = y - logical.y + v_offset
+    cr.save()
+    cr.move_to(x, render_y)
+    PangoCairo.show_layout(cr, layout)
+    cr.restore()
+
+
+# ---------------------------------------------------------------------------
+# Ornaments
+# ---------------------------------------------------------------------------
+
+def draw_ornament_line(cr, y, width, color, thickness=1, length=250):
+    """Horizontal ornament: left dash, centre diamond, right dash."""
+    cr.set_line_width(thickness)
+    _set_cairo_color(cr, color)
     cx = width // 2
-    draw.line([(cx - length, y), (cx - 6, y)], fill=color, width=thickness)
-    draw.line([(cx + 6, y), (cx + length, y)], fill=color, width=thickness)
-    draw.ellipse([(cx - 5, y - 4), (cx + 5, y + 4)], fill=color)
+
+    # Left dash
+    cr.move_to(cx - length, y)
+    cr.line_to(cx - 6, y)
+    cr.stroke()
+
+    # Right dash
+    cr.move_to(cx + 6, y)
+    cr.line_to(cx + length, y)
+    cr.stroke()
+
+    # Centre diamond
+    cr.move_to(cx, y - 4)
+    cr.line_to(cx + 4, y)
+    cr.line_to(cx, y + 4)
+    cr.line_to(cx - 4, y)
+    cr.close_path()
+    cr.fill()
 
 
-def draw_juz_footer(draw, y, juz_num, last_ayah_in_surah, last_surah_name, last_surah_num, font):
-    cx = WIDTH // 2
-    FOOTER_LINE_LEN = 180
+# ---------------------------------------------------------------------------
+# Surah headers
+# ---------------------------------------------------------------------------
 
-    footer_text = f"Juz {juz_num}  \u2014  Verse {last_ayah_in_surah}  \u2014  {last_surah_name} ({last_surah_num})"
-    bbox = font.getbbox(footer_text)
-    sw = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
-    text_ascent = -bbox[1]
+def draw_surah_header_centered(cr, y, name_ar, name_en,
+                               fd_ar: Pango.FontDescription,
+                               fd_en: Pango.FontDescription):
+    """Centred surah header with Arabic + English names and ornament lines."""
+    draw_ornament_line(cr, y, WIDTH, GOLD, 2)
 
-    gap = 18
-
-    draw_ornament_line(draw, y, WIDTH, GOLD, 2, FOOTER_LINE_LEN)
-    text_y = y + gap + text_ascent
-    draw.text((cx - sw // 2, text_y), footer_text, fill=GOLD, font=font)
-    bottom_ornament = text_y - text_ascent + text_h + gap
-    draw_ornament_line(draw, bottom_ornament, WIDTH, GOLD, 2, FOOTER_LINE_LEN)
-    return bottom_ornament + 28
-
-
-def draw_surah_header_centered(draw, y, name_ar, name_en, font_ar, font_en):
-    cx = WIDTH // 2
-    draw_ornament_line(draw, y, WIDTH, GOLD, 2)
     y += 28
-    bbox = font_ar.getbbox(name_ar)
-    tw = bbox[2] - bbox[0]
-    draw.text((cx - tw // 2, y), name_ar, fill=GOLD, font=font_ar)
+    layout_ar = _make_pango_layout(cr, name_ar, _AMIRI_BOLD_FAMILY, FONT_SIZE_SURAH_AR)
+    ar_w, _, _, _ = _pango_text_extents(layout_ar)
+    _set_cairo_color(cr, GOLD)
+    _show_layout_at(cr, layout_ar, (WIDTH - ar_w) / 2, y)
+
     y += FONT_SIZE_SURAH_AR + 12
-    bbox = font_en.getbbox(name_en)
-    sw = bbox[2] - bbox[0]
-    draw.text((cx - sw // 2, y), name_en, fill=DARK_GOLD, font=font_en)
+    if name_en:
+        layout_en = _make_pango_layout(cr, name_en, _AMIRI_BOLD_FAMILY, FONT_SIZE_SURAH_EN)
+        en_w, _, _, _ = _pango_text_extents(layout_en)
+        _set_cairo_color(cr, DARK_GOLD)
+        _show_layout_at(cr, layout_en, (WIDTH - en_w) / 2, y)
+
     y += FONT_SIZE_SURAH_EN + 16
-    draw_ornament_line(draw, y, WIDTH, GOLD, 2)
-    return y + 36
+    draw_ornament_line(cr, y, WIDTH, GOLD, 2)
 
 
-def draw_surah_header_justified(draw, y, name_ar, font_ar):
-    cx = WIDTH // 2
-    draw_ornament_line(draw, y, WIDTH, GOLD, 2)
-    bbox = font_ar.getbbox(name_ar)
-    tw = bbox[2] - bbox[0]
-    asc = bbox[1]
-    desc = bbox[3]
-    text_h = desc - asc
+def draw_surah_header_justified(cr, y, name_ar,
+                                fd_ar: Pango.FontDescription):
+    """Justified-layout surah header — Arabic only."""
     GAP = 35
-    y_text = y + GAP - asc
-    y_bottom = y + 2 * GAP + text_h
-    draw.text((cx - tw // 2, y_text), name_ar, fill=GOLD, font=font_ar)
-    draw_ornament_line(draw, y_bottom, WIDTH, GOLD, 2)
-    return y_bottom + 40
+    draw_ornament_line(cr, y, WIDTH, GOLD, 2)
+
+    layout_ar = _make_pango_layout(cr, name_ar, _AMIRI_BOLD_FAMILY, FONT_SIZE_SURAH_JUSTIFIED)
+    ar_w, _, _, _ = _pango_text_extents(layout_ar)
+
+    _set_cairo_color(cr, GOLD)
+    _show_layout_at(cr, layout_ar, (WIDTH - ar_w) / 2, y + GAP)
+
+    y_bottom = y + 2 * GAP
+    draw_ornament_line(cr, y_bottom, WIDTH, GOLD, 2)
 
 
-def draw_basmalah_centered(draw, y, font_basmalah):
-    text = "\u0628\u0650\u0633\u0652\u0645\u0650 \u0627\u0644\u0644\u0651\u064e\u0647\u0650 \u0627\u0644\u0631\u0651\u064e\u062d\u0652\u0645\u064e\u0670\u0646\u0650 \u0627\u0644\u0631\u0651\u064e\u062d\u0650\u064a\u0645\u0650"
-    bbox = font_basmalah.getbbox(text)
-    tw = bbox[2] - bbox[0]
-    x = (WIDTH - tw) // 2
-    draw.text((x, y), text, fill=BASMALAH_COLOR, font=font_basmalah)
-    rule_y = y + bbox[3] + 20
-    draw_ornament_line(draw, rule_y, WIDTH, GOLD, 2, 250)
-    return rule_y + 36
+# ---------------------------------------------------------------------------
+# Basmalah
+# ---------------------------------------------------------------------------
+
+def draw_basmalah(cr, y, layout, basmalah_font_desc):
+    """Render the Basmalah centred with an ornament line below."""
+    from .config import FONT_SIZE_BASMALAH_JUSTIFIED
+    basm_h = FONT_SIZE_BASMALAH if layout == "centered" else FONT_SIZE_BASMALAH_JUSTIFIED
+
+    p_layout = _make_pango_layout(cr, BASMALAH_TEXT, _AMIRI_QURAN_FAMILY, 0)
+    p_layout.set_font_description(basmalah_font_desc)
+    bw, bh, ink_y, log_y = _pango_text_extents(p_layout)
+
+    cr.save()
+    _set_cairo_color(cr, BASMALAH_COLOR)
+    _show_layout_at(cr, p_layout, (WIDTH - bw) / 2, y, v_center_height=basm_h)
+    cr.restore()
+
+    # Ornament line below the basmalah text
+    ink, logical = p_layout.get_pixel_extents()
+    rule_y = y + basm_h + 20
+    draw_ornament_line(cr, rule_y, WIDTH, GOLD, 2, 250)
 
 
-def draw_basmalah_justified(draw, y, font_basm):
-    text = "\u0628\u0650\u0633\u0652\u0645\u0650 \u0627\u0644\u0644\u0651\u064e\u0647\u0650 \u0627\u0644\u0631\u0651\u064e\u062d\u0652\u0645\u064e\u0670\u0646\u0650 \u0627\u0644\u0631\u0651\u064e\u062d\u0650\u064a\u0645\u0650"
-    bbox = font_basm.getbbox(text)
-    tw = bbox[2] - bbox[0]
-    draw.text(((WIDTH - tw) // 2, y), text, fill=BASMALAH_COLOR, font=font_basm)
-    rule_y = y + bbox[3] + 20
-    draw_ornament_line(draw, rule_y, WIDTH, GOLD, 2, 250)
-    return rule_y + 36
+# ---------------------------------------------------------------------------
+# Juz footer
+# ---------------------------------------------------------------------------
+
+def draw_juz_footer(cr, y, juz_num, last_ayah_in_surah,
+                    surah_name, surah_num, fd_footer):
+    """Render the juz info footer with ornament lines."""
+    FOOTER_LINE_LEN = 180
+    GAP = 18
+
+    footer_text = (
+        f"Juz {juz_num}  \u2014  Verse {last_ayah_in_surah}  "
+        f"\u2014  {surah_name} ({surah_num})"
+    )
+
+    p_layout = _make_pango_layout(cr, footer_text, _AMIRI_BOLD_FAMILY, 0)
+    p_layout.set_font_description(fd_footer)
+    fw, fh, _, _ = _pango_text_extents(p_layout)
+
+    draw_ornament_line(cr, y, WIDTH, GOLD, 2, FOOTER_LINE_LEN)
+
+    _set_cairo_color(cr, GOLD)
+    _show_layout_at(cr, p_layout, (WIDTH - fw) / 2, y + GAP)
+
+    bottom_ornament = y + GAP + fh + GAP
+    draw_ornament_line(cr, bottom_ornament, WIDTH, GOLD, 2, FOOTER_LINE_LEN)
 
 
-def draw_justified_line(draw, y, word_items, font, max_width, is_last):
-    if not word_items:
-        return
-    total_word_w = sum(ww for _, ww, _ in word_items)
-    space_w = font.getbbox(" ")[2] - font.getbbox(" ")[0]
-    if is_last or len(word_items) == 1:
-        gap = space_w
+# ---------------------------------------------------------------------------
+# Text lines with PangoCairo + Kashida justification
+# ---------------------------------------------------------------------------
+
+def _build_line_text_for_pango(words: list) -> str:
+    """Join word texts with spaces for Pango rendering."""
+    return " ".join(w.text for w in words)
+
+
+def _build_line_attrs(words: list, layout) -> Pango.AttrList:
+    """Build Pango attributes to colour verse markers differently."""
+    attr_list = Pango.AttrList()
+    char_pos = 0
+    vr, vg, vb = (c * 257 for c in VERSE_MARKER_COLOR)
+
+    for i, w in enumerate(words):
+        if w.is_marker:
+            attr = Pango.attr_foreground_new(vr, vg, vb)
+            attr.start_index = char_pos
+            attr.end_index = char_pos + len(w.text)
+            attr_list.insert(attr)
+        char_pos += len(w.text)
+        if i < len(words) - 1:
+            char_pos += 1  # space
+
+    return attr_list
+
+
+def draw_text_line(cr, line_words, y, is_verse_last: bool,
+                   layout_mode: str, line_h: int,
+                   quran_fd: Pango.FontDescription):
+    """Render one line of Quran text at position y using PangoCairo.
+
+    - Justified layout: full Kashida justification for non-last lines.
+    - Centred layout: last line centred, other lines spread to margins.
+    - y is the top of the line area; text is centred vertically within line_h.
+    """
+    if layout_mode == "justified":
+        text_width = TEXT_WIDTH_JUSTIFIED
+        margin_x = MARGIN_X_JUSTIFIED
+        rule_margin = MARGIN_X_JUSTIFIED
     else:
-        num_gaps = len(word_items) - 1
-        total_space = max_width - total_word_w
-        gap = total_space / num_gaps if num_gaps > 0 else 0
-    x = WIDTH - MARGIN_X_JUSTIFIED
-    for w, ww, is_marker in word_items:
-        x -= ww
-        color = VERSE_MARKER_COLOR if is_marker else TEXT_COLOR
-        draw.text((x, y), w, fill=color, font=font)
-        x -= gap
+        text_width = WIDTH - 2 * MARGIN_X
+        margin_x = MARGIN_X
+        rule_margin = MARGIN_X
 
-
-def draw_centered_continuous_line(draw, y, word_items, font, max_width, is_last):
-    if not word_items:
+    line_text = _build_line_text_for_pango(line_words)
+    if not line_text.strip():
         return
-    total_word_w = sum(ww for _, ww, _ in word_items)
-    space_w = font.getbbox(" ")[2] - font.getbbox(" ")[0]
 
-    num_gaps = len(word_items) - 1
-    if is_last or num_gaps == 0:
-        total_w = total_word_w + num_gaps * space_w
-        x = (WIDTH + total_w) // 2
-        for w, ww, is_marker in word_items:
-            x -= ww
-            color = VERSE_MARKER_COLOR if is_marker else TEXT_COLOR
-            draw.text((x, y), w, fill=color, font=font)
-            x -= space_w
+    attr_list = _build_line_attrs(line_words, None)
+
+    if layout_mode == "centered" and is_verse_last:
+        # Last line of verse: centred, no justification, natural width
+        p_layout = _make_pango_layout(
+            cr, line_text, _AMIRI_QURAN_FAMILY, 0,
+            width_px=None, justify=False, alignment=Pango.Alignment.CENTER,
+        )
+        p_layout.set_font_description(quran_fd)
+        p_layout.set_attributes(attr_list)
+        ink, log = p_layout.get_pixel_extents()
+        v_offset = (line_h - log.height) // 2 - log.y
+        cr.save()
+        _set_cairo_color(cr, TEXT_COLOR)
+        _show_layout_at(cr, p_layout, 0, y + v_offset)
+        cr.restore()
     else:
-        total_space = max_width - total_word_w
-        gap = total_space / num_gaps if num_gaps > 0 else space_w
-        x = WIDTH - MARGIN_X
-        for w, ww, is_marker in word_items:
-            x -= ww
-            color = VERSE_MARKER_COLOR if is_marker else TEXT_COLOR
-            draw.text((x, y), w, fill=color, font=font)
-            x -= gap
+        # Non-last or justified lines: full Kashida justification
+        p_layout = _make_pango_layout(
+            cr, line_text, _AMIRI_QURAN_FAMILY, 0,
+            width_px=text_width, justify=not is_verse_last,
+            alignment=Pango.Alignment.LEFT,
+        )
+        p_layout.set_font_description(quran_fd)
+        p_layout.set_attributes(attr_list)
+        p_layout.set_wrap(Pango.WrapMode.WORD)
+        ink, log = p_layout.get_pixel_extents()
+        v_offset = (line_h - log.height) // 2 - log.y
+        x = WIDTH - margin_x - text_width
+        cr.save()
+        _set_cairo_color(cr, TEXT_COLOR)
+        _show_layout_at(cr, p_layout, x, y + v_offset)
+        cr.restore()
+
+
+def draw_line_rule(cr, y, layout_mode: str):
+    """Horizontal rule between text lines."""
+    if layout_mode == "justified":
+        x0, x1 = MARGIN_X_JUSTIFIED, WIDTH - MARGIN_X_JUSTIFIED
+    else:
+        x0, x1 = MARGIN_X, WIDTH - MARGIN_X
+
+    _set_cairo_color(cr, LINE_RULE_COLOR)
+    cr.set_line_width(2)
+    cr.move_to(x0, y)
+    cr.line_to(x1, y)
+    cr.stroke()
+
+
+# ---------------------------------------------------------------------------
+# Waqf overlay
+# ---------------------------------------------------------------------------
+
+def draw_waqf_overlays(cr, line_words, y, quran_fd, waqf_fd,
+                       layout_mode: str = "centered",
+                       is_verse_last: bool = False,
+                       line_h: int = 150):
+    """Draw Mushaf waqf indicator letters above the text line.
+
+    Uses the same PangoLayout as the text line to determine word
+    X positions, accounting for Kashida justification.
+    """
+    from .config import (WIDTH, MARGIN_X, MARGIN_X_JUSTIFIED,
+                          TEXT_WIDTH_JUSTIFIED)
+
+    if layout_mode == "justified":
+        text_width = TEXT_WIDTH_JUSTIFIED
+        margin_x = MARGIN_X_JUSTIFIED
+    else:
+        text_width = WIDTH - 2 * MARGIN_X
+        margin_x = MARGIN_X
+
+    line_text = _build_line_text_for_pango(line_words)
+    if not line_text.strip():
+        return
+
+    # Build layout mirroring how draw_text_line renders it
+    if layout_mode == "centered" and is_verse_last:
+        p_layout = _make_pango_layout(
+            cr, line_text, _AMIRI_QURAN_FAMILY, 0,
+            width_px=None, justify=False, alignment=Pango.Alignment.CENTER,
+        )
+    else:
+        p_layout = _make_pango_layout(
+            cr, line_text, _AMIRI_QURAN_FAMILY, 0,
+            width_px=text_width, justify=not is_verse_last,
+            alignment=Pango.Alignment.LEFT,
+        )
+    p_layout.set_font_description(quran_fd)
+    p_layout.set_wrap(Pango.WrapMode.WORD)
+
+    attr_list = _build_line_attrs(line_words, None)
+    p_layout.set_attributes(attr_list)
+
+    # Compute vertical offset matching draw_text_line
+    ink, log = p_layout.get_pixel_extents()
+    v_offset = (line_h - log.height) // 2 - log.y
+
+    # Compute horizontal offset — text starts at x=margin_x (for non-centered)
+    # or centered (for centered last lines)
+    if layout_mode == "centered" and is_verse_last:
+        base_x = (WIDTH - log.width) / 2
+    else:
+        base_x = WIDTH - margin_x - text_width + log.x
+
+    # Get the X position of each word via Pango
+    char_pos = 0
+    waqf_items = []
+    for w in line_words:
+        if w.mushaf_letters:
+            try:
+                index_within_layout = char_pos
+                rect = p_layout.index_to_pos(index_within_layout)
+                word_x = base_x + (rect.x // Pango.SCALE)
+                word_width = rect.width // Pango.SCALE
+                waqf_items.append((word_x, word_width, w.mushaf_letters))
+            except Exception:
+                pass
+        char_pos += len(w.text)
+        if not w.is_marker:
+            char_pos += 1  # space after non-marker words
+
+    if not waqf_items:
+        return
+
+    # Render each Mushaf letter above its word
+    waqf_layout = Pango.Layout.new(PangoCairo.create_context(cr))
+    waqf_layout.set_font_description(waqf_fd)
+
+    cr.save()
+    _set_cairo_color(cr, WAQF_MARKER_COLOR)
+
+    for word_x, word_width, mushaf in waqf_items:
+        waqf_layout.set_text(mushaf)
+        w_ink, w_log = waqf_layout.get_pixel_extents()
+        mw = w_log.width
+        mh = w_log.height
+        mushaf_x = word_x + (word_width - mw) // 2
+        mushaf_y = (y + v_offset) - mh - 4
+        _show_layout_at(cr, waqf_layout, mushaf_x, mushaf_y - w_log.y)
+
+    cr.restore()

@@ -1,29 +1,211 @@
+"""
+Page-based renderer using Cairo + PangoCairo.
+
+Renders discrete 1920x1080 pages from the layout engine's output.
+Each page is a standalone Cairo surface → numpy array.
+"""
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-from PIL.ImageFont import Layout
+from PIL import Image
+
+import gi
+gi.require_version("Pango", "1.0")
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Pango
+import cairo
 
 from .config import (
-    WIDTH, HEIGHT, MARGIN_X, MARGIN_X_JUSTIFIED, TEXT_WIDTH_JUSTIFIED,
-    BG_COLOR_CENTERED, TEXT_COLOR, VERSE_MARKER_COLOR, LINE_RULE_COLOR, DARK_GOLD,
-    FONT_KFGQPC, FONT_AMIRI_QURAN, FONT_AMIRI_BOLD, FONT_AMIRI_REG,
-    FONT_SIZE_QURAN, FONT_SIZE_BASMALAH, FONT_SIZE_SURAH_AR, FONT_SIZE_SURAH_EN,
-    FONT_SIZE_JUSTIFIED, FONT_SIZE_BASMALAH_JUSTIFIED, FONT_SIZE_SURAH_JUSTIFIED,
+    WIDTH, HEIGHT, MARGIN_X, MARGIN_X_JUSTIFIED,
+    BG_COLOR_CENTERED, DARK_GOLD, WAQF_FONT_SIZE,
     LINE_H_CENTERED, LINE_H_JUSTIFIED,
-    TOP_PAD, BOT_PAD, BASMALAH_WORD,
+    FONT_SIZE_QURAN, FONT_SIZE_JUSTIFIED,
+    FONT_SIZE_SURAH_AR, FONT_SIZE_SURAH_EN, FONT_SIZE_SURAH_JUSTIFIED,
+    FONT_SIZE_BASMALAH, FONT_SIZE_BASMALAH_JUSTIFIED,
+    FONT_AMIRI_BOLD, FONT_AMIRI_REG,
 )
-from .text import (
-    to_arabic_numeral, attach_waqf_marks, strip_bismillah, normalize_arabic,
-    make_verse_marker, center_wrap_text, build_justified_lines,
-    build_continuous_lines,
+from .layout_engine import (
+    LayoutEngine, Page, HeaderItem, BasmalahItem,
+    TextLine, FooterItem,
 )
 from .drawing import (
-    draw_ornament_line, draw_surah_header_centered, draw_surah_header_justified,
-    draw_basmalah_centered, draw_basmalah_justified, draw_justified_line,
-    draw_centered_continuous_line, draw_juz_footer,
+    draw_ornament_line, draw_surah_header_centered,
+    draw_surah_header_justified, draw_basmalah,
+    draw_juz_footer, draw_text_line, draw_line_rule,
+    draw_waqf_overlays, _cairo_rgb, _set_cairo_color,
 )
 
+_AMIRI_QURAN_FAMILY = "Amiri Quran"
+_AMIRI_BOLD_FAMILY = "Amiri"
+_AMIRI_REGULAR_FAMILY = "Amiri"
 
-def _build_elements_from_surah(surah, ayahs_slice=None):
+
+# ---------------------------------------------------------------------------
+# Font descriptors (Pango FontDescription objects)
+# ---------------------------------------------------------------------------
+
+def _make_fds(layout_mode: str):
+    """Create Pango FontDescription objects for each text role."""
+    if layout_mode == "justified":
+        fd_quran = Pango.FontDescription.from_string(
+            f"{_AMIRI_QURAN_FAMILY} {FONT_SIZE_JUSTIFIED}")
+        fd_ar = Pango.FontDescription.from_string(
+            f"{_AMIRI_BOLD_FAMILY} Bold {FONT_SIZE_SURAH_JUSTIFIED}")
+        fd_basm = Pango.FontDescription.from_string(
+            f"{_AMIRI_QURAN_FAMILY} {FONT_SIZE_BASMALAH_JUSTIFIED}")
+    else:
+        fd_quran = Pango.FontDescription.from_string(
+            f"{_AMIRI_QURAN_FAMILY} {FONT_SIZE_QURAN}")
+        fd_ar = Pango.FontDescription.from_string(
+            f"{_AMIRI_BOLD_FAMILY} Bold {FONT_SIZE_SURAH_AR}")
+        fd_basm = Pango.FontDescription.from_string(
+            f"{_AMIRI_QURAN_FAMILY} {FONT_SIZE_BASMALAH}")
+
+    fd_en = Pango.FontDescription.from_string(
+        f"{_AMIRI_BOLD_FAMILY} Bold {FONT_SIZE_SURAH_EN}")
+    fd_footer = Pango.FontDescription.from_string(
+        f"{_AMIRI_BOLD_FAMILY} Bold {FONT_SIZE_SURAH_EN}")
+    fd_waqf = Pango.FontDescription.from_string(
+        f"{_AMIRI_BOLD_FAMILY} Bold {WAQF_FONT_SIZE}")
+
+    return fd_quran, fd_ar, fd_basm, fd_en, fd_footer, fd_waqf
+
+
+# ---------------------------------------------------------------------------
+# Page renderer
+# ---------------------------------------------------------------------------
+
+def render_pages(pages: list[Page], total_height: int,
+                 layout_mode: str = "centered") -> list[np.ndarray]:
+    """Render each Page to a 1920x1080 numpy array.
+
+    Returns (page_arrays, total_height).
+    """
+    fd_quran, fd_ar, fd_basm, fd_en, fd_footer, fd_waqf = _make_fds(layout_mode)
+
+    if layout_mode == "justified":
+        line_h = LINE_H_JUSTIFIED
+    else:
+        line_h = LINE_H_CENTERED
+
+    arrays = []
+    for page in pages:
+        arr = _render_one_page(page, total_height, layout_mode, line_h,
+                               fd_quran, fd_ar, fd_basm, fd_en, fd_footer,
+                               fd_waqf)
+        arrays.append((page.scroll_y, arr))
+
+    return arrays
+
+
+def _render_one_page(page: Page, total_height: int, layout_mode: str,
+                     line_h: int, fd_quran, fd_ar, fd_basm, fd_en,
+                     fd_footer, fd_waqf) -> np.ndarray:
+    """Render a single page to a numpy array."""
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, WIDTH, HEIGHT)
+    cr = cairo.Context(surf)
+
+    # Background
+    bg = _cairo_rgb(BG_COLOR_CENTERED)
+    cr.set_source_rgb(*bg)
+    cr.paint()
+
+    # Top ornament line (only on first page, near the top of the scroll)
+    if page.scroll_y == 0:
+        draw_ornament_line(cr, 16, WIDTH, DARK_GOLD, 1, 350)
+
+    # Bottom ornament line (only on last page, near the bottom)
+    last_page_bottom = page.scroll_y + HEIGHT >= total_height - 4
+    if last_page_bottom:
+        bot_y_rel = total_height - page.scroll_y - 16
+        draw_ornament_line(cr, bot_y_rel, WIDTH, DARK_GOLD, 1, 350)
+
+    # Headers
+    for h in page.headers:
+        if layout_mode == "justified":
+            draw_surah_header_justified(cr, h.y, h.name_ar, fd_ar)
+        else:
+            draw_surah_header_centered(cr, h.y, h.name_ar, h.name_en,
+                                       fd_ar, fd_en)
+
+    # Basmalahs
+    for b in page.basmalahs:
+        draw_basmalah(cr, b.y, layout_mode, fd_basm)
+
+    # Text lines
+    for i, tl in enumerate(page.text_lines):
+        draw_text_line(cr, tl.words, tl.y, tl.is_verse_last,
+                       layout_mode, line_h, fd_quran)
+        draw_waqf_overlays(cr, tl.words, tl.y, fd_quran, fd_waqf,
+                           layout_mode=layout_mode,
+                           is_verse_last=tl.is_verse_last,
+                           line_h=line_h)
+
+        # Ruled line below (skip after the last text line on this page)
+        is_page_last_line = (i == len(page.text_lines) - 1)
+        if not is_page_last_line:
+            rule_y = tl.y + line_h
+            draw_line_rule(cr, rule_y, layout_mode)
+
+    # Footer
+    if page.footer:
+        draw_juz_footer(
+            cr, page.footer.y,
+            page.footer.juz_num, page.footer.last_ayah,
+            page.footer.surah_name, page.footer.surah_num,
+            fd_footer,
+        )
+
+    # Convert Cairo surface to numpy array (RGBA → RGB)
+    buf = surf.get_data()
+    arr = np.frombuffer(buf, dtype=np.uint8).reshape(HEIGHT, WIDTH, 4)
+    # Cairo uses BGRA byte order in little-endian (ARGB in big-endian).
+    # On little-endian, buf is BGRA. Convert to RGB.
+    rgb = arr[:, :, :3].copy()
+    # Swap B and R channels (Cairo BGRA → RGB)
+    rgb[:, :, [0, 2]] = rgb[:, :, [2, 0]]
+    return rgb
+
+
+# ---------------------------------------------------------------------------
+# High-level entry point (replaces render.render())
+# ---------------------------------------------------------------------------
+
+def build_and_render(elements: list, layout_mode: str = "centered"
+                     ) -> tuple[list, int, list]:
+    """Layout elements and render pages.
+
+    Returns (page_arrays, total_height, pages).
+    page_arrays is a list of (scroll_y, numpy_array) tuples.
+    """
+    engine = LayoutEngine(layout=layout_mode)
+    pages, total_height = engine.layout_pages(elements)
+    page_arrays = render_pages(pages, total_height, layout_mode)
+    return page_arrays, total_height, pages
+
+
+# ---------------------------------------------------------------------------
+# Public API (matches old render module)
+# ---------------------------------------------------------------------------
+
+def render(elements, layout="centered", fonts=None):
+    """Layout and render to pages. Returns (page_arrays, total_height)."""
+    page_arrays, total_height, pages = build_and_render(elements, layout)
+    return page_arrays, total_height
+
+
+def load_fonts(layout="centered"):
+    """No-op — Pango handles fonts internally via FontDescription."""
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Element builders (preserved from old render.py)
+# ---------------------------------------------------------------------------
+
+def build_elements_from_surah(surah, ayahs_slice=None):
+    """Build element tuples from a surah dict."""
+    from .text import normalize_arabic, strip_bismillah
+    from .config import BASMALAH_WORD
+
     elements = []
     elements.append(("surah_header", surah["name"], surah.get("englishName", "")))
     if surah.get("number") != 9:
@@ -48,281 +230,39 @@ def _build_elements_from_surah(surah, ayahs_slice=None):
     return elements
 
 
-def _build_elements_from_juz(juz_data):
+def build_elements_from_juz(juz_data):
+    """Build element tuples from juz data."""
+    from .text import normalize_arabic, strip_bismillah
+
     elements = []
     last_surah = None
     is_first_ayah_in_surah = False
-    last_ayah_global = 0
+    last_ayah_in_surah = 0
     last_surah_name = ""
     last_surah_num = 0
+
     for ayah in juz_data["data"]["ayahs"]:
         surah_id = ayah["surah"]["number"]
         if surah_id != last_surah:
-            elements.append(("surah_header", ayah["surah"]["name"], ayah["surah"]["englishName"]))
+            elements.append(("surah_header", ayah["surah"]["name"],
+                             ayah["surah"]["englishName"]))
             if surah_id != 9:
                 elements.append(("basmalah",))
             last_surah = surah_id
             is_first_ayah_in_surah = True
+
         txt = normalize_arabic(ayah["text"])
         if is_first_ayah_in_surah:
             txt = strip_bismillah(txt)
             is_first_ayah_in_surah = False
             if not txt:
                 continue
+
         elements.append(("verse", txt, ayah["numberInSurah"], ayah["number"]))
-        last_ayah_global = ayah["number"]
         last_ayah_in_surah = ayah["numberInSurah"]
         last_surah_name = ayah["surah"]["name"]
         last_surah_num = ayah["surah"]["number"]
 
-    elements.append(("juz_footer", juz_data["data"]["number"], last_ayah_in_surah,
-                     last_surah_name, last_surah_num))
+    elements.append(("juz_footer", juz_data["data"]["number"],
+                     last_ayah_in_surah, last_surah_name, last_surah_num))
     return elements
-
-
-def _layout_centered(elements, fonts):
-    font_quran, font_bold, font_en, font_basmalah = fonts
-    max_w = WIDTH - 2 * MARGIN_X
-
-    header_h = 36 + 28 + FONT_SIZE_SURAH_AR + 12 + FONT_SIZE_SURAH_EN + 16 + 36
-    basmalah_h = FONT_SIZE_BASMALAH + 20 + 36
-
-    surah_blocks = []
-    y = TOP_PAD
-
-    current_header_data = None
-    current_header_y = 0
-    current_basmalah_y = 0
-    current_verse_words = []
-    footer_data = None
-
-    for elem in elements:
-        kind = elem[0]
-        if kind == "surah_header":
-            if current_verse_words:
-                lines = build_continuous_lines(current_verse_words, font_quran, max_w, style="circle")
-                text_start_y = current_basmalah_y + basmalah_h
-                surah_blocks.append({
-                    "header_data": current_header_data,
-                    "header_y": current_header_y,
-                    "basmalah_y": current_basmalah_y,
-                    "lines": lines,
-                    "text_start_y": text_start_y,
-                })
-                y = text_start_y + len(lines) * LINE_H_CENTERED
-
-            current_header_data = elem[1:]
-            current_header_y = y
-            y += header_h
-            current_basmalah_y = y
-            current_verse_words = []
-        elif kind == "basmalah":
-            y += basmalah_h
-        elif kind == "verse":
-            text, vnum = elem[1], elem[2]
-            marker = make_verse_marker(vnum, style="circle")
-            words = attach_waqf_marks(text.split())
-            words.append(marker)
-            current_verse_words.extend(words)
-        elif kind == "juz_footer":
-            footer_data = elem
-
-    if current_verse_words:
-        lines = build_continuous_lines(current_verse_words, font_quran, max_w, style="circle")
-        text_start_y = current_basmalah_y + basmalah_h
-        surah_blocks.append({
-            "header_data": current_header_data,
-            "header_y": current_header_y,
-            "basmalah_y": current_basmalah_y,
-            "lines": lines,
-            "text_start_y": text_start_y,
-        })
-        y = text_start_y + len(lines) * LINE_H_CENTERED
-
-    if footer_data:
-        juz_num, last_ayah, surah_name, surah_num = footer_data[1:]
-        footer_text = f"Juz {juz_num}  \u2014  Verse {last_ayah}  \u2014  {surah_name} ({surah_num})"
-        footer_bbox = font_en.getbbox(footer_text)
-        footer_text_h = footer_bbox[3] - footer_bbox[1]
-        footer_h = footer_text_h + 64
-        surah_blocks.append({
-            "type": "footer",
-            "footer_data": footer_data[1:],
-            "footer_y": y,
-        })
-        y += footer_h
-
-    total_height = y + BOT_PAD
-    return surah_blocks, total_height
-
-
-def _layout_justified(elements, fonts):
-    font_quran, font_ar, font_basm = fonts
-
-    header_h = 2 * 35 + 60 + 40
-    basmalah_h = FONT_SIZE_BASMALAH_JUSTIFIED + 20 + 36
-
-    surah_blocks = []
-    y = TOP_PAD
-
-    current_header_data = None
-    current_header_y = 0
-    current_basmalah_y = 0
-    current_verse_words = []
-    footer_data = None
-
-    for elem in elements:
-        kind = elem[0]
-        if kind == "surah_header":
-            if current_verse_words:
-                lines = build_justified_lines(current_verse_words, font_quran, TEXT_WIDTH_JUSTIFIED)
-                text_start_y = current_basmalah_y + basmalah_h
-                surah_blocks.append({
-                    "header_data": current_header_data,
-                    "header_y": current_header_y,
-                    "basmalah_y": current_basmalah_y,
-                    "lines": lines,
-                    "text_start_y": text_start_y,
-                })
-                y = text_start_y + len(lines) * LINE_H_JUSTIFIED
-
-            current_header_data = elem[1:]
-            current_header_y = y
-            y += header_h
-            current_basmalah_y = y
-            current_verse_words = []
-        elif kind == "basmalah":
-            y += basmalah_h
-        elif kind == "verse":
-            text, vnum = elem[1], elem[2]
-            marker = make_verse_marker(vnum, style="circle")
-            verse_words = attach_waqf_marks(text.split())
-            verse_words.append(marker)
-            current_verse_words.extend(verse_words)
-        elif kind == "juz_footer":
-            footer_data = elem
-
-    if current_verse_words:
-        lines = build_justified_lines(current_verse_words, font_quran, TEXT_WIDTH_JUSTIFIED)
-        text_start_y = current_basmalah_y + basmalah_h
-        surah_blocks.append({
-            "header_data": current_header_data,
-            "header_y": current_header_y,
-            "basmalah_y": current_basmalah_y,
-            "lines": lines,
-            "text_start_y": text_start_y,
-        })
-        y = text_start_y + len(lines) * LINE_H_JUSTIFIED
-
-    if footer_data:
-        juz_num, last_ayah, surah_name, surah_num = footer_data[1:]
-        footer_text = f"Juz {juz_num}  \u2014  Verse {last_ayah}  \u2014  {surah_name} ({surah_num})"
-        footer_bbox = font_ar.getbbox(footer_text)
-        footer_text_h = footer_bbox[3] - footer_bbox[1]
-        footer_h = footer_text_h + 64
-        surah_blocks.append({
-            "type": "footer",
-            "footer_data": footer_data[1:],
-            "footer_y": y,
-        })
-        y += footer_h
-
-    total_height = y + BOT_PAD
-    return surah_blocks, total_height
-
-
-def _draw_centered(surah_blocks, total_height, fonts):
-    font_quran, font_bold, font_en, font_basmalah = fonts
-    max_w = WIDTH - 2 * MARGIN_X
-
-    img = Image.new("RGB", (WIDTH, total_height), BG_COLOR_CENTERED)
-    draw = ImageDraw.Draw(img)
-    draw_ornament_line(draw, 16, WIDTH, DARK_GOLD, 1, 350)
-    draw_ornament_line(draw, total_height - 16, WIDTH, DARK_GOLD, 1, 350)
-
-    ascent, descent = font_quran.getmetrics()
-    v_offset = (LINE_H_CENTERED - (ascent + descent)) // 2
-
-    for block in surah_blocks:
-        if block.get("type") == "footer":
-            draw_juz_footer(draw, block["footer_y"], *block["footer_data"], font_en)
-            continue
-
-        name_ar, name_en = block["header_data"]
-        draw_surah_header_centered(draw, block["header_y"], name_ar, name_en or "", font_bold, font_en)
-        draw_basmalah_centered(draw, block["basmalah_y"], font_basmalah)
-
-        y = block["text_start_y"]
-        for i, line_items in enumerate(block["lines"]):
-            is_last = (i == len(block["lines"]) - 1)
-            draw_centered_continuous_line(draw, y + v_offset, line_items, font_quran, max_w, is_last)
-            if not is_last:
-                rule_y = y + LINE_H_CENTERED
-                draw.line([(MARGIN_X, rule_y), (WIDTH - MARGIN_X, rule_y)],
-                          fill=LINE_RULE_COLOR, width=2)
-            y += LINE_H_CENTERED
-
-    return np.array(img)
-
-
-def _draw_justified(surah_blocks, total_height, fonts):
-    font_quran, font_ar, font_basm = fonts
-    footer_font = ImageFont.truetype(FONT_AMIRI_REG, FONT_SIZE_SURAH_EN)
-
-    img = Image.new("RGB", (WIDTH, total_height), BG_COLOR_CENTERED)
-    draw = ImageDraw.Draw(img)
-    draw_ornament_line(draw, 16, WIDTH, DARK_GOLD, 1, 350)
-    draw_ornament_line(draw, total_height - 16, WIDTH, DARK_GOLD, 1, 350)
-
-    ascent, descent = font_quran.getmetrics()
-    v_offset = (LINE_H_JUSTIFIED - (ascent + descent)) // 2
-
-    for block in surah_blocks:
-        if block.get("type") == "footer":
-            draw_juz_footer(draw, block["footer_y"], *block["footer_data"], footer_font)
-            continue
-
-        name_ar = block["header_data"][0]
-        draw_surah_header_justified(draw, block["header_y"], name_ar, font_ar)
-        draw_basmalah_justified(draw, block["basmalah_y"], font_basm)
-
-        y = block["text_start_y"]
-        for i, line_items in enumerate(block["lines"]):
-            is_last = (i == len(block["lines"]) - 1)
-            draw_justified_line(draw, y + v_offset, line_items, font_quran, TEXT_WIDTH_JUSTIFIED, is_last)
-            if not is_last:
-                rule_y = y + LINE_H_JUSTIFIED
-                draw.line([(MARGIN_X_JUSTIFIED, rule_y), (WIDTH - MARGIN_X_JUSTIFIED, rule_y)],
-                          fill=LINE_RULE_COLOR, width=2)
-            y += LINE_H_JUSTIFIED
-
-    return np.array(img)
-
-
-def render(elements, layout="centered", fonts=None):
-    if layout == "justified":
-        surah_blocks, total_height = _layout_justified(elements, fonts)
-        return _draw_justified(surah_blocks, total_height, fonts)
-    surah_blocks, total_height = _layout_centered(elements, fonts)
-    return _draw_centered(surah_blocks, total_height, fonts)
-
-
-def load_fonts(layout="centered"):
-    if layout == "justified":
-        font_quran = ImageFont.truetype(FONT_AMIRI_QURAN, FONT_SIZE_JUSTIFIED, layout_engine=Layout.RAQM)
-        font_ar = ImageFont.truetype(FONT_AMIRI_BOLD, FONT_SIZE_SURAH_JUSTIFIED, layout_engine=Layout.RAQM)
-        font_basm = ImageFont.truetype(FONT_AMIRI_QURAN, FONT_SIZE_BASMALAH_JUSTIFIED, layout_engine=Layout.RAQM)
-        return (font_quran, font_ar, font_basm)
-    font_quran = ImageFont.truetype(FONT_KFGQPC, FONT_SIZE_QURAN)
-    font_bold = ImageFont.truetype(FONT_AMIRI_BOLD, FONT_SIZE_SURAH_AR)
-    font_en = ImageFont.truetype(FONT_AMIRI_REG, FONT_SIZE_SURAH_EN)
-    font_basmalah = ImageFont.truetype(FONT_KFGQPC, FONT_SIZE_BASMALAH)
-    return (font_quran, font_bold, font_en, font_basmalah)
-
-
-def build_elements_from_surah(surah, ayahs_slice=None):
-    return _build_elements_from_surah(surah, ayahs_slice)
-
-
-def build_elements_from_juz(juz_data):
-    return _build_elements_from_juz(juz_data)
