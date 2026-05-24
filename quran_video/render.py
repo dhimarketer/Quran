@@ -198,12 +198,15 @@ def load_fonts(layout="centered"):
 
 
 # ---------------------------------------------------------------------------
-# Element builders (preserved from old render.py)
+# Element builders
 # ---------------------------------------------------------------------------
 
 def build_elements_from_surah(surah, ayahs_slice=None):
-    """Build element tuples from a surah dict."""
-    from .text import normalize_arabic, strip_bismillah
+    """Build element tuples from a surah dict.
+
+    Verse elements are Verse dataclass instances; other elements are tuples.
+    """
+    from .text import normalize_arabic, strip_bismillah, Verse
     from .config import BASMALAH_WORD
 
     elements = []
@@ -224,15 +227,22 @@ def build_elements_from_surah(surah, ayahs_slice=None):
             if not txt:
                 continue
         if txt:
-            elements.append(("verse", txt, display_num, v["number"]))
+            elements.append(Verse(
+                text=txt,
+                number=v["number"],
+                number_in_surah=display_num,
+            ))
             display_num += 1
 
     return elements
 
 
 def build_elements_from_juz(juz_data):
-    """Build element tuples from juz data."""
-    from .text import normalize_arabic, strip_bismillah
+    """Build element tuples from juz data.
+
+    Verse elements are Verse dataclass instances; other elements are tuples.
+    """
+    from .text import normalize_arabic, strip_bismillah, Verse
 
     elements = []
     last_surah = None
@@ -258,7 +268,11 @@ def build_elements_from_juz(juz_data):
             if not txt:
                 continue
 
-        elements.append(("verse", txt, ayah["numberInSurah"], ayah["number"]))
+        elements.append(Verse(
+            text=txt,
+            number=ayah["number"],
+            number_in_surah=ayah["numberInSurah"],
+        ))
         last_ayah_in_surah = ayah["numberInSurah"]
         last_surah_name = ayah["surah"]["name"]
         last_surah_num = ayah["surah"]["number"]

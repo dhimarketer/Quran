@@ -26,7 +26,7 @@ from .config import (
     TOP_PAD, BOT_PAD,
 )
 from .text import (
-    attach_waqf_marks, extract_waqf, make_verse_marker,
+    attach_waqf_marks, extract_waqf, make_verse_marker, Verse,
 )
 
 # ---------------------------------------------------------------------------
@@ -162,12 +162,10 @@ class LayoutEngine:
         """Process elements sequentially, laying out verse text in batches
         per surah block. Returns flat list of all positioned items."""
         items: list = []
-        y = self._next_y(TOP_PAD)  # use a method so we can track page boundaries
+        y = TOP_PAD
 
         verse_texts: list[str] = []
         verse_vnums: list[int] = []
-        first_surah = True
-        current_surah_num = None
 
         def flush_verse_batch():
             nonlocal y
@@ -182,6 +180,11 @@ class LayoutEngine:
             verse_vnums.clear()
 
         for elem in elements:
+            if isinstance(elem, Verse):
+                verse_texts.append(elem.text)
+                verse_vnums.append(elem.number_in_surah)
+                continue
+
             kind = elem[0]
 
             if kind == "surah_header":
@@ -200,10 +203,6 @@ class LayoutEngine:
                 items.append(BasmalahItem(y=y, height=self.basmalah_h))
                 y += self.basmalah_h
 
-            elif kind == "verse":
-                verse_texts.append(elem[1])
-                verse_vnums.append(elem[2])
-
             elif kind == "juz_footer":
                 flush_verse_batch()
                 footer_h = 80
@@ -217,9 +216,6 @@ class LayoutEngine:
         flush_verse_batch()
 
         return items
-
-    def _next_y(self, y):
-        return y
 
     # -- Pango line-breaking ------------------------------------------------
 

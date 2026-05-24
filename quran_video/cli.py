@@ -8,6 +8,7 @@ from .api import fetch_surah, fetch_juz, load_quran
 from .timing import load_timings, fetch_ayah_duration
 from .render import render, load_fonts, build_elements_from_surah, build_elements_from_juz
 from .encode import encode_video
+from .text import Verse
 
 
 FIXED_DURATION_PER_VERSE = 4.0
@@ -16,17 +17,15 @@ FIXED_DURATION_PER_VERSE = 4.0
 def compute_duration(elements, timings=None):
     total = 2.0
     for elem in elements:
-        if elem[0] == "surah_header":
-            total += 3.0 / RATE_2X
-        elif elem[0] == "basmalah":
-            total += 3.0 / RATE_2X
-        elif elem[0] == "verse":
-            ayah_number = elem[3]
-            if timings:
-                dur = fetch_ayah_duration(ayah_number, timings)
-            else:
-                dur = FIXED_DURATION_PER_VERSE
+        if isinstance(elem, Verse):
+            ayah_number = elem.number
+            dur = fetch_ayah_duration(ayah_number, timings) if timings else FIXED_DURATION_PER_VERSE
             total += dur / RATE_2X
+        elif isinstance(elem, tuple):
+            if elem[0] == "surah_header":
+                total += 3.0 / RATE_2X
+            elif elem[0] == "basmalah":
+                total += 3.0 / RATE_2X
     return total
 
 

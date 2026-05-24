@@ -378,6 +378,19 @@ Format: `Juz N — Verse M — Surah Name (N)` (U+2014 em-dash separators). Orna
 
 ## Text Processing (`text.py`)
 
+### Verse dataclass
+
+```python
+@dataclass
+class Verse:
+    """Immutable representation of a single Quranic verse."""
+    text: str              # cleaned text (normalized, basmalah stripped)
+    number: int            # global ayah number (1-6236)
+    number_in_surah: int   # verse number within its surah (1-N)
+```
+
+Element builders (`build_elements_from_surah` / `build_elements_from_juz`) now use `Verse` instances for verse elements instead of unnamed tuples. Non-verse elements remain as tuples: `("surah_header", name_ar, name_en)`, `("basmalah",)`, `("juz_footer", ...)`.
+
 ### Constants
 
 ```python
@@ -464,15 +477,11 @@ This lets RAQM render WAQF symbols above their host word.
 
 Currently used: `"arabic_indicate"` in both layouts.
 
-### `is_arabic_digit(c)` — Check for U+0660-U+0669
+### `is_arabic_digit(c)` — Utility: check for U+0660-U+0669
 
-### `is_verse_marker(word)` — Detect standalone Arabic numeral marker
+### `is_verse_marker(word)` — Utility: detect standalone Arabic numeral marker
 
-Strip whitespace, remove optional leading U+06DD, check remaining chars are all Arabic digits.
-
-### `measure_word(font, word)` — Word width via `font.getbbox()`
-
-**DEPRECATED**: Replaced by PangoLayout measurement in `layout_engine.py`.
+Both `is_arabic_digit` and `is_verse_marker` are kept for backward compatibility but are not used by the current PangoCairo pipeline (the layout engine uses WordSlot.is_marker instead).
 
 ---
 
@@ -586,14 +595,6 @@ This approach correctly follows traditional Mushaf conventions where stop indica
 | Small high seen | U+06DC | 8 | Mn | س |
 | Small high three dots | U+06DB | 6 | Mn | ز |
 | Rounded high stop filled | U+06EC | 2 | Mn | م |
-
-### `build_justified_lines_per_verse(verse_word_lists, font, max_width)` — Legacy word-wrap per verse (justified)
-
-**DEPRECATED**: Replaced by PangoLayout-based line breaking in `layout_engine.py`.
-
-### `build_continuous_lines_per_verse(verse_word_lists, font, max_width, style)` — Legacy word-wrap per verse (centered)
-
-**DEPRECATED**: Replaced by PangoLayout-based line breaking in `layout_engine.py`.
 
 ---
 
