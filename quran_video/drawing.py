@@ -18,21 +18,24 @@ def draw_ornament_line(draw, y, width, color, thickness=1, length=250):
     draw.ellipse([(cx - 5, y - 4), (cx + 5, y + 4)], fill=color)
 
 
-def draw_juz_footer(draw, y, juz_num, last_ayah_global, last_surah_name, last_surah_num, font_ar, font_en):
+def draw_juz_footer(draw, y, juz_num, last_ayah_in_surah, last_surah_name, last_surah_num, font):
     cx = WIDTH // 2
     FOOTER_LINE_LEN = 180
 
-    draw_ornament_line(draw, y, WIDTH, GOLD, 2, FOOTER_LINE_LEN)
-    y += 24
-
-    footer_text = f"Juz {juz_num}  \u2014  Verse {last_ayah_global}  \u2014  {last_surah_name} ({last_surah_num})"
-    bbox = font_en.getbbox(footer_text)
+    footer_text = f"Juz {juz_num}  \u2014  Verse {last_ayah_in_surah}  \u2014  {last_surah_name} ({last_surah_num})"
+    bbox = font.getbbox(footer_text)
     sw = bbox[2] - bbox[0]
-    draw.text((cx - sw // 2, y), footer_text, fill=GOLD, font=font_en)
-    y += FONT_SIZE_SURAH_EN + 12
+    text_h = bbox[3] - bbox[1]
+    text_ascent = -bbox[1]
+
+    gap = 18
 
     draw_ornament_line(draw, y, WIDTH, GOLD, 2, FOOTER_LINE_LEN)
-    return y + 28
+    text_y = y + gap + text_ascent
+    draw.text((cx - sw // 2, text_y), footer_text, fill=GOLD, font=font)
+    bottom_ornament = text_y - text_ascent + text_h + gap
+    draw_ornament_line(draw, bottom_ornament, WIDTH, GOLD, 2, FOOTER_LINE_LEN)
+    return bottom_ornament + 28
 
 
 def draw_surah_header_centered(draw, y, name_ar, name_en, font_ar, font_en):

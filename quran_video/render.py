@@ -71,10 +71,11 @@ def _build_elements_from_juz(juz_data):
                 continue
         elements.append(("verse", txt, ayah["numberInSurah"], ayah["number"]))
         last_ayah_global = ayah["number"]
+        last_ayah_in_surah = ayah["numberInSurah"]
         last_surah_name = ayah["surah"]["name"]
         last_surah_num = ayah["surah"]["number"]
 
-    elements.append(("juz_footer", juz_data["data"]["number"], last_ayah_global,
+    elements.append(("juz_footer", juz_data["data"]["number"], last_ayah_in_surah,
                      last_surah_name, last_surah_num))
     return elements
 
@@ -139,7 +140,11 @@ def _layout_centered(elements, fonts):
         y = text_start_y + len(lines) * LINE_H_CENTERED
 
     if footer_data:
-        footer_h = 24 + FONT_SIZE_SURAH_EN + 12 + 28
+        juz_num, last_ayah, surah_name, surah_num = footer_data[1:]
+        footer_text = f"Juz {juz_num}  \u2014  Verse {last_ayah}  \u2014  {surah_name} ({surah_num})"
+        footer_bbox = font_en.getbbox(footer_text)
+        footer_text_h = footer_bbox[3] - footer_bbox[1]
+        footer_h = footer_text_h + 64
         surah_blocks.append({
             "type": "footer",
             "footer_data": footer_data[1:],
@@ -210,7 +215,11 @@ def _layout_justified(elements, fonts):
         y = text_start_y + len(lines) * LINE_H_JUSTIFIED
 
     if footer_data:
-        footer_h = 24 + FONT_SIZE_SURAH_EN + 12 + 28
+        juz_num, last_ayah, surah_name, surah_num = footer_data[1:]
+        footer_text = f"Juz {juz_num}  \u2014  Verse {last_ayah}  \u2014  {surah_name} ({surah_num})"
+        footer_bbox = font_ar.getbbox(footer_text)
+        footer_text_h = footer_bbox[3] - footer_bbox[1]
+        footer_h = footer_text_h + 64
         surah_blocks.append({
             "type": "footer",
             "footer_data": footer_data[1:],
@@ -236,7 +245,7 @@ def _draw_centered(surah_blocks, total_height, fonts):
 
     for block in surah_blocks:
         if block.get("type") == "footer":
-            draw_juz_footer(draw, block["footer_y"], *block["footer_data"], font_bold, font_en)
+            draw_juz_footer(draw, block["footer_y"], *block["footer_data"], font_en)
             continue
 
         name_ar, name_en = block["header_data"]
@@ -258,6 +267,7 @@ def _draw_centered(surah_blocks, total_height, fonts):
 
 def _draw_justified(surah_blocks, total_height, fonts):
     font_quran, font_ar, font_basm = fonts
+    footer_font = ImageFont.truetype(FONT_AMIRI_REG, FONT_SIZE_SURAH_EN)
 
     img = Image.new("RGB", (WIDTH, total_height), BG_COLOR_CENTERED)
     draw = ImageDraw.Draw(img)
@@ -269,7 +279,7 @@ def _draw_justified(surah_blocks, total_height, fonts):
 
     for block in surah_blocks:
         if block.get("type") == "footer":
-            draw_juz_footer(draw, block["footer_y"], *block["footer_data"], font_ar, font_basm)
+            draw_juz_footer(draw, block["footer_y"], *block["footer_data"], footer_font)
             continue
 
         name_ar = block["header_data"][0]
