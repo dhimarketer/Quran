@@ -215,7 +215,7 @@ def build_elements_from_surah(surah, ayahs_slice=None):
         elements.append(("basmalah",))
 
     first_ayah = surah["ayahs"][0]["text"].strip("\ufeff")
-    has_bismillah = first_ayah.split()[0] == BASMALAH_WORD
+    has_bismillah = first_ayah.split()[0].replace("\u06E1", "\u0652") == BASMALAH_WORD
 
     ayahs = surah["ayahs"] if ayahs_slice is None else surah["ayahs"][ayahs_slice]
     display_num = 1

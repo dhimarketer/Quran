@@ -81,8 +81,8 @@ def _show_layout_at(cr, layout, x, y, v_center_height=None):
     """Render a PangoLayout at (x, y) in the Cairo context.
 
     (x, y) is the desired position for the ink (visible text) top.
-    PangoCairo.show_layout places the logical rectangle starting at
-    (x, y), so we adjust by -logical.y to align ink at y.
+    PangoCairo.show_layout places the layout origin at (x, render_y),
+    so we adjust by -ink.y to align ink top at y.
 
     If v_center_height is given, the ink is centred vertically within
     that many pixels (useful for headers/basmalahs).
@@ -92,7 +92,7 @@ def _show_layout_at(cr, layout, x, y, v_center_height=None):
         v_offset = (v_center_height - ink.height) // 2
     else:
         v_offset = 0
-    render_y = y - logical.y + v_offset
+    render_y = y - ink.y + v_offset
     cr.save()
     cr.move_to(x, render_y)
     PangoCairo.show_layout(cr, layout)
@@ -232,21 +232,25 @@ def _build_line_text_for_pango(words: list) -> str:
     return " ".join(w.text for w in words)
 
 
-def _build_line_attrs(words: list, layout) -> Pango.AttrList:
-    """Build Pango attributes to colour verse markers differently."""
-    attr_list = Pango.AttrList()
-    char_pos = 0
-    vr, vg, vb = (c * 257 for c in VERSE_MARKER_COLOR)
+def _build_line_attrs(words: list) -> Pango.AttrList:
+    """Build Pango attributes to colour verse markers differently.
 
-    for i, w in enumerate(words):
+    WordSlots' char_start/char_end are global byte offsets (from the
+    full-text PangoLayout).  We compute per-line byte positions for
+    the text that draw_text_line actually feeds to Pango.
+    """
+    attr_list = Pango.AttrList()
+    vr, vg, vb = (c * 257 for c in VERSE_MARKER_COLOR)
+    byte_pos = 0
+
+    for w in words:
+        w_bytes = len(w.text.encode("utf-8"))
         if w.is_marker:
             attr = Pango.attr_foreground_new(vr, vg, vb)
-            attr.start_index = char_pos
-            attr.end_index = char_pos + len(w.text)
+            attr.start_index = byte_pos
+            attr.end_index = byte_pos + w_bytes
             attr_list.insert(attr)
-        char_pos += len(w.text)
-        if i < len(words) - 1:
-            char_pos += 1  # space
+        byte_pos += w_bytes + 1  # +1 for space between words
 
     return attr_list
 
@@ -273,21 +277,23 @@ def draw_text_line(cr, line_words, y, is_verse_last: bool,
     if not line_text.strip():
         return
 
-    attr_list = _build_line_attrs(line_words, None)
+    attr_list = _build_line_attrs(line_words)
 
     if layout_mode == "centered" and is_verse_last:
-        # Last line of verse: centred, no justification, natural width
+        # Last line: centred alignment, no justification, constrained to margins
         p_layout = _make_pango_layout(
             cr, line_text, _AMIRI_QURAN_FAMILY, 0,
-            width_px=None, justify=False, alignment=Pango.Alignment.CENTER,
+            width_px=text_width, justify=False, alignment=Pango.Alignment.CENTER,
         )
         p_layout.set_font_description(quran_fd)
         p_layout.set_attributes(attr_list)
+        p_layout.set_wrap(Pango.WrapMode.WORD)
         ink, log = p_layout.get_pixel_extents()
-        v_offset = (line_h - log.height) // 2 - log.y
+        v_offset = (line_h - ink.height) // 2
+        x = WIDTH - margin_x - text_width
         cr.save()
         _set_cairo_color(cr, TEXT_COLOR)
-        _show_layout_at(cr, p_layout, 0, y + v_offset)
+        _show_layout_at(cr, p_layout, x, y + v_offset)
         cr.restore()
     else:
         # Non-last or justified lines: full Kashida justification
@@ -300,7 +306,7 @@ def draw_text_line(cr, line_words, y, is_verse_last: bool,
         p_layout.set_attributes(attr_list)
         p_layout.set_wrap(Pango.WrapMode.WORD)
         ink, log = p_layout.get_pixel_extents()
-        v_offset = (line_h - log.height) // 2 - log.y
+        v_offset = (line_h - ink.height) // 2
         x = WIDTH - margin_x - text_width
         cr.save()
         _set_cairo_color(cr, TEXT_COLOR)
@@ -333,7 +339,8 @@ def draw_waqf_overlays(cr, line_words, y, quran_fd, waqf_fd,
     """Draw Mushaf waqf indicator letters above the text line.
 
     Uses the same PangoLayout as the text line to determine word
-    X positions, accounting for Kashida justification.
+    X positions.  For RTL text, the visual word extent is obtained
+    from index_to_pos at the word's start-byte and end-byte+1.
     """
     from .config import (WIDTH, MARGIN_X, MARGIN_X_JUSTIFIED,
                           TEXT_WIDTH_JUSTIFIED)
@@ -349,11 +356,10 @@ def draw_waqf_overlays(cr, line_words, y, quran_fd, waqf_fd,
     if not line_text.strip():
         return
 
-    # Build layout mirroring how draw_text_line renders it
     if layout_mode == "centered" and is_verse_last:
         p_layout = _make_pango_layout(
             cr, line_text, _AMIRI_QURAN_FAMILY, 0,
-            width_px=None, justify=False, alignment=Pango.Alignment.CENTER,
+            width_px=text_width, justify=False, alignment=Pango.Alignment.CENTER,
         )
     else:
         p_layout = _make_pango_layout(
@@ -364,54 +370,46 @@ def draw_waqf_overlays(cr, line_words, y, quran_fd, waqf_fd,
     p_layout.set_font_description(quran_fd)
     p_layout.set_wrap(Pango.WrapMode.WORD)
 
-    attr_list = _build_line_attrs(line_words, None)
+    attr_list = _build_line_attrs(line_words)
     p_layout.set_attributes(attr_list)
 
-    # Compute vertical offset matching draw_text_line
     ink, log = p_layout.get_pixel_extents()
-    v_offset = (line_h - log.height) // 2 - log.y
+    base_x = WIDTH - margin_x - text_width + log.x
+    text_ink_top = y + (line_h - ink.height) // 2
 
-    # Compute horizontal offset — text starts at x=margin_x (for non-centered)
-    # or centered (for centered last lines)
-    if layout_mode == "centered" and is_verse_last:
-        base_x = (WIDTH - log.width) / 2
-    else:
-        base_x = WIDTH - margin_x - text_width + log.x
-
-    # Get the X position of each word via Pango
-    char_pos = 0
-    waqf_items = []
-    for w in line_words:
+    waqf_items: list[tuple[int, int, str]] = []
+    byte_pos = 0
+    for wi, w in enumerate(line_words):
+        w_bytes = len(w.text.encode("utf-8"))
+        byte_next = byte_pos + w_bytes + 1  # start of next word (skip space)
         if w.mushaf_letters:
             try:
-                index_within_layout = char_pos
-                rect = p_layout.index_to_pos(index_within_layout)
-                word_x = base_x + (rect.x // Pango.SCALE)
-                word_width = rect.width // Pango.SCALE
-                waqf_items.append((word_x, word_width, w.mushaf_letters))
+                r_start = p_layout.index_to_pos(byte_pos)
+                r_end = p_layout.index_to_pos(byte_next)
+                word_left = base_x + (r_end.x // Pango.SCALE)
+                word_right = base_x + (r_start.x // Pango.SCALE)
+                if word_left > word_right:
+                    word_left, word_right = word_right, word_left
+                waqf_items.append((word_left, word_right, w.mushaf_letters))
             except Exception:
                 pass
-        char_pos += len(w.text)
-        if not w.is_marker:
-            char_pos += 1  # space after non-marker words
+        byte_pos = byte_next
 
     if not waqf_items:
         return
 
-    # Render each Mushaf letter above its word
     waqf_layout = Pango.Layout.new(PangoCairo.create_context(cr))
     waqf_layout.set_font_description(waqf_fd)
 
     cr.save()
     _set_cairo_color(cr, WAQF_MARKER_COLOR)
 
-    for word_x, word_width, mushaf in waqf_items:
+    for word_left, word_right, mushaf in waqf_items:
         waqf_layout.set_text(mushaf)
         w_ink, w_log = waqf_layout.get_pixel_extents()
-        mw = w_log.width
-        mh = w_log.height
-        mushaf_x = word_x + (word_width - mw) // 2
-        mushaf_y = (y + v_offset) - mh - 4
-        _show_layout_at(cr, waqf_layout, mushaf_x, mushaf_y - w_log.y)
+        mushaf_x = (word_left + word_right - w_ink.width) // 2
+        waqf_bottom_y = text_ink_top - 4
+        cr.move_to(mushaf_x, waqf_bottom_y - w_ink.y - w_ink.height)
+        PangoCairo.show_layout(cr, waqf_layout)
 
     cr.restore()

@@ -35,11 +35,15 @@ from .text import (
 
 @dataclass
 class WordSlot:
-    """A word with waqf overlay info and position tracking."""
+    """A word with waqf overlay info and position tracking.
+
+    char_start and char_end are byte offsets into the Pango text buffer
+    (Pango uses UTF-8 byte offsets internally).
+    """
     text: str
     mushaf_letters: str
     is_marker: bool       # verse-end marker (U+06DD + numeral)
-    char_start: int = 0   # index into Pango text buffer
+    char_start: int = 0   # byte offset into Pango text
     char_end: int = 0
 
 
@@ -244,13 +248,13 @@ class LayoutEngine:
 
         line_count = layout.get_line_count()
         text_lines: list[TextLine] = []
-        text_len = len(text)
+        text_byte_len = len(text.encode("utf-8"))
 
         for li in range(line_count):
             pango_line = layout.get_line(li)
             if pango_line is None:
                 continue
-            if pango_line.start_index >= text_len:
+            if pango_line.start_index >= text_byte_len:
                 continue  # phantom trailing lines from Pango justification
 
             line_start = pango_line.start_index
@@ -269,14 +273,19 @@ class LayoutEngine:
                     text=ws.text,
                     mushaf_letters=ws.mushaf_letters,
                     is_marker=ws.is_marker,
+                    char_start=ws.char_start,
+                    char_end=ws.char_end,
                 ))
 
-            has_marker = any(w.is_marker for w in line_words)
             text_lines.append(TextLine(
                 words=line_words,
                 y=0,
-                is_verse_last=has_marker,
+                is_verse_last=False,
             ))
+
+        # Only the last line is unjusified and centred
+        if text_lines:
+            text_lines[-1].is_verse_last = True
 
         return text_lines
 
@@ -285,12 +294,21 @@ class LayoutEngine:
         """Build a text string for Pango with colour attributes and word
         position tracking.
 
+        Uses byte positions throughout because Pango's internal indices
+        (line start_index, attribute start/end) are byte offsets into
+        the UTF-8 representation of the text.
+
         Returns (full_text, attr_list, word_slots).
         """
         parts: list[str] = []
         attr_list = Pango.AttrList()
         word_slots: list[WordSlot] = []
-        char_pos = 0
+        byte_pos = 0
+
+        # Get the UTF-8 bytes of the accumulated text to track byte offsets.
+        # We build the text as before (character-level) and compute byte
+        # offsets by encoding each part incrementally.
+        text_parts: list[str] = []
 
         # 8-bit → 16-bit colour channels for Pango
         vr, vg, vb = (c * 257 for c in VERSE_MARKER_COLOR)
@@ -302,27 +320,27 @@ class LayoutEngine:
                 cleaned, mushaf = extract_waqf(w)
                 if not cleaned:
                     continue
-                start = char_pos
-                parts.append(cleaned)
-                char_pos += len(cleaned)
+                start = byte_pos
+                text_parts.append(cleaned)
+                byte_pos += len(cleaned.encode("utf-8"))
                 word_slots.append(WordSlot(
                     text=cleaned,
                     mushaf_letters=mushaf,
                     is_marker=False,
                     char_start=start,
-                    char_end=char_pos,
+                    char_end=byte_pos,
                 ))
 
                 # Space separator between words
-                parts.append(" ")
-                char_pos += 1
+                text_parts.append(" ")
+                byte_pos += 1  # space is 1 byte in UTF-8
 
             # Verse-end marker (coloured gold)
             marker = make_verse_marker(vnum, style="arabic_indicate")
-            start = char_pos
-            parts.append(marker)
-            end = start + len(marker)
-            char_pos = end
+            start = byte_pos
+            text_parts.append(marker)
+            end = start + len(marker.encode("utf-8"))
+            byte_pos = end
             word_slots.append(WordSlot(
                 text=marker,
                 mushaf_letters="",
@@ -337,10 +355,10 @@ class LayoutEngine:
 
             # Space between verses (but not after the last verse)
             if i < len(verse_texts) - 1:
-                parts.append(" ")
-                char_pos += 1
+                text_parts.append(" ")
+                byte_pos += 1
 
-        return "".join(parts).rstrip(), attr_list, word_slots
+        return "".join(text_parts).rstrip(), attr_list, word_slots
 
     # -- pagination ---------------------------------------------------------
 

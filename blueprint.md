@@ -221,7 +221,10 @@ The `LayoutEngine` replaces manual word-splitting + `getbbox()` measurement with
 
 ```python
 @dataclass WordSlot:    text, mushaf_letters, is_marker, char_start, char_end
-@dataclass TextLine:    words, y, is_verse_last
+```
+
+Note: `char_start` and `char_end` are **UTF-8 byte offsets** into the Pango text buffer (Pango uses byte offsets internally for indices). Using character offsets would cause misalignment between word tracking and Pango line positions, since Arabic characters are 2 bytes in UTF-8.
+@dataclass TextLine:    words, y, is_verse_last (True only for the very last line of a batch)
 @dataclass HeaderItem:  y, height, name_ar, name_en, layout
 @dataclass BasmalahItem: y, height
 @dataclass FooterItem:  y, height, juz_num, last_ayah, surah_name, surah_num
@@ -246,7 +249,7 @@ Each page is rendered independently as a 1920×1080 `cairo.ImageSurface`:
 
 **Key improvement**: Each page is rendered independently (O(1) memory), instead of one massive tall image. Pages overlap by 4px for smooth scrolling transitions.
 
-**Vertical offset**: Pango's logical rectangle has an ink offset (ink.y) that causes text to appear shifted. All drawing functions use `_show_layout_at()` which automatically adjusts for this offset by subtracting `logical.y` from the render position.
+**Vertical offset**: Pango's ink rectangle has an offset from the logical origin (`ink.y`). All drawing functions use `_show_layout_at()` which adjusts by subtracting `ink.y` to place visible text at the exact desired position. Callers use `ink.height` for vertical centring within `line_h`.
 
 ### Stage 5: Duration Calculation
 
@@ -294,7 +297,7 @@ Frame generation:
 | Verse gap | 0 (words flow continuously) |
 | Font | AmiriQuran via Pango (same as justified) |
 
-Line rendering via PangoLayout: `set_justify(True)` for non-last lines, `set_alignment(CENTER)` for last verse lines.
+Line rendering via PangoLayout: `set_justify(True)` for all lines except the very last line of content; last line uses `set_alignment(CENTER)` with `width_px=text_width` (constrained to margins, not natural width).
 
 ### Justified Layout
 
@@ -310,7 +313,7 @@ Line rendering via PangoLayout: `set_justify(True)` for non-last lines, `set_ali
 | Verse marker style | `"arabic_indicate"` — U+06DD (۝) + Arabic-Indic numeral |
 | Header | Arabic-only (no English) |
 
-Line rendering via PangoLayout: `set_justify(True)` for all lines except last verse line, `set_wrap(WORD)` for word-boundary wrapping.
+Line rendering via PangoLayout: `set_justify(True)` for all except last line; `set_justify(False)` for last line.
 
 ### Surah Block Grouping
 
@@ -327,7 +330,7 @@ All drawing uses Cairo (vector graphics) and PangoCairo (text layout).
 
 ### `_show_layout_at(cr, layout, x, y, v_center_height=None)`
 
-Renders a PangoLayout at position `(x, y)`. Automatically adjusts for Pango's logical-to-ink offset by subtracting `logical.y`. If `v_center_height` is provided, the ink is vertically centred within that height.
+Renders a PangoLayout at position `(x, y)`. Automatically adjusts for Pango's logical-to-ink offset by subtracting `ink.y` (not `logical.y` — this ensures visible text is placed at the exact desired position). If `v_center_height` is provided, the ink is vertically centred within that height.
 
 ### `draw_ornament_line(cr, y, width, color, thickness=1, length=250)`
 
@@ -359,8 +362,9 @@ Renders one line of Quran text using PangoCairo. Key features:
 - **Kashida justification**: Non-last lines use `PangoLayout.set_justify(True)` for Kashida stretching
 - **RTL**: `set_auto_dir(True)` handles right-to-left directionality automatically
 - **Verse marker colouring**: Pango `attr_foreground_new()` attributes colour verse markers (۝+numeral) in VERSE_MARKER_COLOR
-- **Centred last lines**: In "centered" mode, the last line of each verse uses `Pango.Alignment.CENTER` with natural width
-- **Vertical centring**: Text is centred vertically within `line_h` using ink/logical extents from Pango
+- **Centred last line**: In "centered" mode, only the very last line of the entire content uses `Pango.Alignment.CENTER` with `width_px=text_width` (constrained to margins). All other lines are Kashida-justified.
+- **Vertical centring**: Text ink is centred vertically within `line_h` using Pango ink extents (`ink.height`, `ink.y`)
+- **Line width constraint**: All lines (including centred last lines) are constrained to `text_width` (1520 or 1632 px)
 
 ### `draw_line_rule(cr, y, layout_mode)`
 
@@ -522,20 +526,20 @@ layout.set_alignment(Pango.Alignment.LEFT) # Flush-start for RTL
 layout.set_auto_dir(True)                 # Automatic RTL detection
 ```
 
-For last verse lines in centered mode: `set_justify(False)`, `set_alignment(CENTER)`.
+For the very last line in centered mode: `set_justify(False)`, `set_alignment(CENTER)`, `width_px=text_width` (constrained to margins).
 
 ### Phantom Line Filtering
 
-Pango sometimes creates extra empty lines with `set_justify(True)`. These are filtered by checking `pango_line.start_index >= len(text)`.
+Phantom Pango lines are filtered by checking `pango_line.start_index >= text_byte_len` where `text_byte_len = len(text.encode("utf-8"))`.
 
 ### Word Position Tracking
 
 `_build_text_with_tracking()` builds a flat text string from all verse words + markers, with:
 - `PangoAttrList` for verse marker colouring (VERSE_MARKER_COLOR attributes)
-- `WordSlot` objects tracking `char_start`/`char_end` positions in the text buffer
+- `WordSlot` objects tracking `char_start`/`char_end` positions as **UTF-8 byte offsets** in the text buffer
 - Mushaf waqf letters per word for overlay rendering
 
-When mapping PangoLayoutLine character ranges back to WordSlots, the check `ws.char_start >= line_start AND ws.char_start < line_end` ensures each word belongs to exactly one line.
+When mapping PangoLayoutLine byte ranges back to WordSlots, the check `ws.char_start >= line_start AND ws.char_start < line_end` ensures each word belongs to exactly one line. Both Pango line indices and WordSlot positions use UTF-8 byte offsets.
 
 ---
 
@@ -641,6 +645,8 @@ This approach correctly follows traditional Mushaf conventions where stop indica
 | Hash | Description |
 |---|---|
 | *(current)* | Milestone 5: PangoCairo refactor — Kashida justification, Cairo drawing, page-based rendering, streaming FFmpeg encode |
+| *(current)* | Bug fixes: UTF-8 byte offsets in word tracking, ink-based vertical centering, constrained last-line width, proper is_verse_last for continuous flow |
+| *(current)* | Waqf overlay positional fix: per-line byte tracking, RTL visual extent via index_to_pos at word boundaries, proper centering 4px above text |
 
 ---
 
@@ -649,19 +655,20 @@ This approach correctly follows traditional Mushaf conventions where stop indica
 ### Handled
 
 1. **Surah 9 (At-Tawbah)** — No basmalah rendered (checked in both element builders)
-2. **Basmalah embedded in verse 1** — Detected by word match, stripped after header rendering
+2. **Basmalah embedded in verse 1** — Detected by normalized word match (handles U+06E1 sukun variant), stripped after header rendering. Verses that are entirely the basmalah (4 words, e.g. Surah 1 verse 1) are correctly skipped.
 3. **Sukun variant (U+06E1)** — Normalized to U+0652 before basmalah comparison
-4. **Pango logical-to-ink offset** — `_show_layout_at()` automatically adjusts for Pango's `logical.y` offset
+4. **Pango ink offset** — `_show_layout_at()` uses `ink.y` (not `logical.y`) to place visible text at the exact desired position. Callers use `ink.height` for vertical centring.
 5. **Empty verse after basmalah strip** — Skipped
 6. **WAQF marks** — `extract_waqf()` removes Unicode waqf marks from word text, tracks `mushaf_letters` for overlay rendering. PangoAttributes colour verse markers in VERSE_MARKER_COLOR
 7. **Farsi yeh / hair space / word joiner / open tanween** — Normalized via `ARABIC_NORMALIZE_MAP`; waqf marks handled by `WAQF_MUSHAF_MAP` + `extract_waqf()`
 8. **BOM character** — Stripped from all verse text
 9. **WAQF detection** — Uses Unicode categories `Mn`, `Lm`, and `So` (for rub el hizb and sajdah), requires Arabic block range
-10. **Last justified line** — Natural spacing (not force-justified), handled by PangoLayout with `set_justify(True)` + `is_verse_last`
+10. **Last line rendering** — In centered mode, only the very last line of the content uses `set_alignment(CENTER)` with `width_px=text_width` (constrained). All other lines are Kashida-justified. The `is_verse_last` flag is True only on the final TextLine, not on every line containing a verse marker.
 11. **Multi-surah juz footer** — Shows in-surah verse number, not global
-12. **Phantom Pango lines** — Pango sometimes creates extra empty lines with `set_justify(True)`; filtered by checking `start_index >= len(text)`
-13. **Page-based rendering** — Each page rendered independently, O(1) memory regardless of content length
-14. **Kashida justification** — Pango's native Arabic justification via `set_justify(True)` inserts Tatweel stretches at valid connection points
+12. **Phantom Pango lines** — Pango sometimes creates extra empty lines with `set_justify(True)`; filtered by checking `start_index >= text_byte_len` where `text_byte_len = len(text.encode("utf-8"))`
+13. **UTF-8 byte offsets** — `_build_text_with_tracking()` and WordSlot positions use UTF-8 byte offsets (not character positions) because Pango's line indices and attribute positions are byte-based. Arabic characters are 2+ bytes in UTF-8, so character and byte positions differ.
+14. **Page-based rendering** — Each page rendered independently, O(1) memory regardless of content length
+15. **Kashida justification** — Pango's native Arabic justification via `set_justify(True)` inserts Tatweel stretches at valid connection points
 
 ### Limitations
 
@@ -669,7 +676,7 @@ This approach correctly follows traditional Mushaf conventions where stop indica
 2. **Partial timing data** — Only 148 entries cached; full download of 6236 MP3s takes hours
 3. **Speed hardcoded** — Always 2× recitation, no `--rate` flag
 4. **Output directory fixed** — Always `output/` under project root
-5. **Waqf mark positioning** — While `index_to_pos()` provides word X positions, Kashida stretching may shift positions slightly from the manual overlay. Pango mark-to-base features could replace this
+5. **Waqf mark positioning** — `draw_waqf_overlays()` builds a per-line PangoLayout mirroring `draw_text_line`'s rendering. Per-line UTF-8 byte offsets are computed for each word. `index_to_pos()` is called at both the word's start byte and the next word's start byte (end+1), giving the visual extent in RTL. The Mushaf letter is centered within that word extent, 4px above the text ink top.
 6. **API vs local data differences** — The alquran.cloud API includes U+06DF (rounded zero), U+08F0–U+08F2 (open tanween), and other chars not present in quran.json. `ARABIC_NORMALIZE_MAP` handles open tanween; `WAQF_MUSHAF_MAP` handles U+06DF
 7. **No verse highlighting** — Linear scroll, not synced to individual verses
 8. **Legacy `generate_chapter.py`** — Not integrated with the module; no WAQF handling

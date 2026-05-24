@@ -141,7 +141,7 @@ def strip_bismillah(text: str) -> str:
     if not words:
         return text
     first = words[0].replace("\u06E1", "\u0652")
-    if first == BASMALAH_WORD and len(words) > 4:
+    if first == BASMALAH_WORD and len(words) >= 4:
         return " ".join(words[4:])
     return text
 
