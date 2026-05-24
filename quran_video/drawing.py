@@ -99,6 +99,16 @@ def _show_layout_at(cr, layout, x, y, v_center_height=None):
     cr.restore()
 
 
+OT_FEATURES_STR = "mark 1, mkmk 1, ccmp 1"
+
+
+def _add_ot_features(attr_list, byte_len):
+    ot = Pango.AttrFontFeatures.new(OT_FEATURES_STR)
+    ot.start_index = 0
+    ot.end_index = byte_len
+    attr_list.insert(ot)
+
+
 # ---------------------------------------------------------------------------
 # Ornaments
 # ---------------------------------------------------------------------------
@@ -228,16 +238,20 @@ def draw_juz_footer(cr, y, juz_num, last_ayah_in_surah,
 # ---------------------------------------------------------------------------
 
 def _build_line_text_for_pango(words: list) -> str:
-    """Join word texts with spaces for Pango rendering."""
+    """Join word texts with spaces for Pango rendering (includes waqf marks)."""
     return " ".join(w.text for w in words)
+
+
+def _build_line_text_clean(words: list) -> str:
+    """Join word texts without waqf marks for clean rendering."""
+    return " ".join(w.text_clean for w in words if w.text_clean)
 
 
 def _build_line_attrs(words: list) -> Pango.AttrList:
     """Build Pango attributes to colour verse markers differently.
 
-    WordSlots' char_start/char_end are global byte offsets (from the
-    full-text PangoLayout).  We compute per-line byte positions for
-    the text that draw_text_line actually feeds to Pango.
+    Uses w.text (with waqf marks) for byte offsets — matches
+    the full marked-text Pango layout used by draw_waqf_overlays.
     """
     attr_list = Pango.AttrList()
     vr, vg, vb = (c * 257 for c in VERSE_MARKER_COLOR)
@@ -251,6 +265,29 @@ def _build_line_attrs(words: list) -> Pango.AttrList:
             attr.end_index = byte_pos + w_bytes
             attr_list.insert(attr)
         byte_pos += w_bytes + 1  # +1 for space between words
+
+    return attr_list
+
+
+def _build_line_attrs_clean(words: list) -> Pango.AttrList:
+    """Build Pango attributes for the clean-text layout (draw_text_line).
+
+    Uses w.text_clean (without waqf marks) for byte offsets.
+    """
+    attr_list = Pango.AttrList()
+    vr, vg, vb = (c * 257 for c in VERSE_MARKER_COLOR)
+    byte_pos = 0
+
+    for w in words:
+        if not w.text_clean:
+            continue
+        w_bytes = len(w.text_clean.encode("utf-8"))
+        if w.is_marker:
+            attr = Pango.attr_foreground_new(vr, vg, vb)
+            attr.start_index = byte_pos
+            attr.end_index = byte_pos + w_bytes
+            attr_list.insert(attr)
+        byte_pos += w_bytes + 1
 
     return attr_list
 
@@ -273,11 +310,11 @@ def draw_text_line(cr, line_words, y, is_verse_last: bool,
         margin_x = MARGIN_X
         rule_margin = MARGIN_X
 
-    line_text = _build_line_text_for_pango(line_words)
+    line_text = _build_line_text_clean(line_words)
     if not line_text.strip():
         return
 
-    attr_list = _build_line_attrs(line_words)
+    attr_list = _build_line_attrs_clean(line_words)
 
     if layout_mode == "centered" and is_verse_last:
         # Last line: centred alignment, no justification, constrained to margins
@@ -286,6 +323,7 @@ def draw_text_line(cr, line_words, y, is_verse_last: bool,
             width_px=text_width, justify=False, alignment=Pango.Alignment.CENTER,
         )
         p_layout.set_font_description(quran_fd)
+        _add_ot_features(attr_list, len(line_text.encode("utf-8")))
         p_layout.set_attributes(attr_list)
         p_layout.set_wrap(Pango.WrapMode.WORD)
         ink, log = p_layout.get_pixel_extents()
@@ -303,6 +341,7 @@ def draw_text_line(cr, line_words, y, is_verse_last: bool,
             alignment=Pango.Alignment.LEFT,
         )
         p_layout.set_font_description(quran_fd)
+        _add_ot_features(attr_list, len(line_text.encode("utf-8")))
         p_layout.set_attributes(attr_list)
         p_layout.set_wrap(Pango.WrapMode.WORD)
         ink, log = p_layout.get_pixel_extents()
@@ -338,13 +377,10 @@ def draw_waqf_overlays(cr, line_words, y, quran_fd, waqf_fd,
                        line_h: int = 150):
     """Draw Mushaf waqf indicator letters above the text line.
 
-    Uses the same PangoLayout as the text line to determine word
-    X positions.  For RTL text, the visual word extent is obtained
-    from index_to_pos at the word's start-byte and end-byte+1.
+    Words retain their Unicode waqf marks during Pango shaping for
+    correct GPOS positioning.  index_to_pos() returns word extents
+    that account for mark positioning via RAQM/HarfBuzz.
     """
-    from .config import (WIDTH, MARGIN_X, MARGIN_X_JUSTIFIED,
-                          TEXT_WIDTH_JUSTIFIED)
-
     if layout_mode == "justified":
         text_width = TEXT_WIDTH_JUSTIFIED
         margin_x = MARGIN_X_JUSTIFIED
@@ -371,6 +407,7 @@ def draw_waqf_overlays(cr, line_words, y, quran_fd, waqf_fd,
     p_layout.set_wrap(Pango.WrapMode.WORD)
 
     attr_list = _build_line_attrs(line_words)
+    _add_ot_features(attr_list, len(line_text.encode("utf-8")))
     p_layout.set_attributes(attr_list)
 
     ink, log = p_layout.get_pixel_extents()
@@ -381,7 +418,7 @@ def draw_waqf_overlays(cr, line_words, y, quran_fd, waqf_fd,
     byte_pos = 0
     for wi, w in enumerate(line_words):
         w_bytes = len(w.text.encode("utf-8"))
-        byte_next = byte_pos + w_bytes + 1  # start of next word (skip space)
+        byte_next = byte_pos + w_bytes + 1
         if w.mushaf_letters:
             try:
                 r_start = p_layout.index_to_pos(byte_pos)

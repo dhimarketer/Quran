@@ -35,10 +35,10 @@ WAQF_CATEGORIES = {"Mn", "Lm", "So"}
 WAQF_MUSHAF_MAP = {
     0x06D6: "صلي",  # ۖ sad-lam-alef → صلي (wasl awla, continuing preferred)
     0x06D7: "قلي",  # ۗ qaf-lam-alef → قلي (stopping preferred)
-    0x06D8: "طم",   # ۘ meem initial → طم (preferred stop with concession)
+    0x06D8: "م",    # ۘ meem initial → م (waqf lazim)
     0x06DA: "ج",    # ۚ jeem → ج (ja'iz, permissible)
     0x06DB: "ز",    # ۛ three dots → ز (mushtarak)
-    0x06DC: "صل",   # ۜ seen → صل (permissible to continue)
+    0x06DC: "س",    # ۜ seen → س (saktah, brief pause)
     0x06DF: "م",    # ۟ rounded zero → م (waqf lazim)
     0x06E2: "م",    # ۢ meem isolated → م (waqf lazim)
     0x06E4: "ط",    # ۤ madda → ط (waqf mutlaq)
@@ -89,6 +89,9 @@ def extract_waqf(word: str) -> tuple[str, str]:
     Returns (cleaned_word, mushaf_letters) where mushaf_letters is a
     string of traditional Mushaf indicator characters (م ج ط etc.)
     to be drawn above the word.
+
+    DEPRECATED: use get_waqf_mushaf_letters() + keep marks in text
+    for correct RAQM/HarfBuzz GPOS mark positioning.
     """
     cleaned: list[str] = []
     mushaf: list[str] = []
@@ -103,6 +106,23 @@ def extract_waqf(word: str) -> tuple[str, str]:
         else:
             cleaned.append(c)
     return "".join(cleaned), "".join(mushaf)
+
+
+def get_waqf_mushaf_letters(word: str) -> str:
+    """Extract Mushaf indicator letters from waqf marks in *word*.
+
+    Unlike extract_waqf(), this does NOT modify the word text.
+    Waqf marks stay in place so RAQM/HarfBuzz can position them
+    via GPOS mark-to-base and mark-to-mark anchor tables.
+
+    Returns a string of Mushaf indicator characters (صلي, قلي, ج, etc.)
+    """
+    mushaf: list[str] = []
+    for c in word:
+        cp = ord(c)
+        if cp in WAQF_MUSHAF_MAP:
+            mushaf.append(WAQF_MUSHAF_MAP[cp])
+    return "".join(mushaf)
 
 
 def _is_waqf_word(w: str) -> bool:

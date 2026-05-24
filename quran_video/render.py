@@ -135,9 +135,9 @@ def _render_one_page(page: Page, total_height: int, layout_mode: str,
         draw_text_line(cr, tl.words, tl.y, tl.is_verse_last,
                        layout_mode, line_h, fd_quran)
         draw_waqf_overlays(cr, tl.words, tl.y, fd_quran, fd_waqf,
-                           layout_mode=layout_mode,
-                           is_verse_last=tl.is_verse_last,
-                           line_h=line_h)
+                            layout_mode=layout_mode,
+                            is_verse_last=tl.is_verse_last,
+                            line_h=line_h)
 
         # Ruled line below (skip after the last text line on this page)
         is_page_last_line = (i == len(page.text_lines) - 1)

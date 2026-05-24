@@ -220,7 +220,7 @@ The `LayoutEngine` replaces manual word-splitting + `getbbox()` measurement with
 **Data structures**:
 
 ```python
-@dataclass WordSlot:    text, mushaf_letters, is_marker, char_start, char_end
+@dataclass WordSlot:    text, text_clean, mushaf_letters, is_marker, char_start, char_end
 ```
 
 Note: `char_start` and `char_end` are **UTF-8 byte offsets** into the Pango text buffer (Pango uses byte offsets internally for indices). Using character offsets would cause misalignment between word tracking and Pango line positions, since Arabic characters are 2 bytes in UTF-8.
@@ -241,8 +241,8 @@ Each page is rendered independently as a 1920×1080 `cairo.ImageSurface`:
 2. Draw ornamental border lines (first/last page)
 3. Draw surah headers via `PangoCairo.show_layout()`
 4. Draw basmalah via `PangoCairo.show_layout()`
-5. Draw text lines with Kashida justification via `PangoCairo.show_layout()`
-6. Draw waqf Mushaf letters above words (using `PangoLayout.index_to_pos()` for positioning)
+5. Draw text lines with Kashida justification via `PangoCairo.show_layout()` using `text_clean` (waqf marks stripped — only Mushaf overlays appear above)
+6. Draw waqf Mushaf letters above words using `PangoLayout.index_to_pos()` on the marked-text layout (correct GPOS positions)
 7. Draw ruled lines between text lines
 8. Draw juz footer
 9. Convert `cairo.ImageSurface` → numpy array (BGRA → RGB swap)
@@ -370,10 +370,6 @@ Renders one line of Quran text using PangoCairo. Key features:
 
 Horizontal rule between text lines (LINE_RULE_COLOR, 2px width). Margin x varies by layout.
 
-### `draw_waqf_overlays(cr, line_words, y, quran_fd, waqf_fd, ...)`
-
-Draws Mushaf waqf indicator letters above their host words. Uses `PangoLayout.index_to_pos()` to determine exact word X positions in the Kashida-justified line, then renders each Mushaf letter in VERSE_MARKER_COLOR above the corresponding word.
-
 ### `draw_juz_footer(cr, y, juz_num, last_ayah_in_surah, surah_name, surah_num, fd_footer)`
 
 Format: `Juz N — Verse M — Surah Name (N)` (U+2014 em-dash separators). Ornament lines above and below.
@@ -402,10 +398,7 @@ BASMALAH_WORD     = "بِسْمِ"          # Basmalah first word for detection
 AYAH_MARKER_CHAR  = "\u06DD"          # ۝
 VERSE_MARKER_OPEN = "\uFD3F"          # ﴿
 VERSE_MARKER_CLOSE= "\uFD3E"          # ﴾
-WAQF_CATEGORIES   = {"Mn", "Lm", "So"}  # Unicode categories for waqf marks
 ```
-
-### `to_arabic_numeral(n)` — Integer → Arabic-Indic digits (U+0660-U+0669)
 
 ### `ARABIC_NORMALIZE_MAP` — Formatting character substitutions
 
@@ -422,11 +415,9 @@ Only formatting-level mappings (not waqf marks):
 | Open dammatan | U+08F1 | Dammatan | U+064C | Open → closed tanween (API data) |
 | Open kasratan | U+08F2 | Kasratan | U+064D | Open → closed tanween (API data) |
 
-Waqf marks are handled by `WAQF_MUSHAF_MAP` and `extract_waqf()` instead of normalization.
+### `WAQF_MUSHAF_MAP` — Waqf mark reference (kept for compatibility)
 
-### `WAQF_MUSHAF_MAP` — Waqf mark to Mushaf letter mapping
-
-Each waqf Unicode code point is mapped to a traditional Mushaf indicator letter (م ص ق ج س ط ز ن و ي). Invisible marks are removed from text; visible marks (ۖۗۚ) are kept in text AND also generate a Mushaf letter. The Mushaf letter is drawn above the word in `WAQF_MARKER_COLOR` using `WAQF_FONT_SIZE` Amiri Bold.
+Each waqf Unicode code point maps to a traditional Mushaf indicator letter (م ص ق ج س ط ز ن و ي). Waqf marks are **no longer stripped from text** during rendering — they remain in the string so RAQM/HarfBuzz can position them via GPOS anchor tables (`+mark`, `+mkmk`, `+ccmp`). The native Unicode marks render directly as combining glyphs above their base characters. The Mushaf letter overlay system has been removed in favor of native font rendering, which is cleaner and avoids double-rendering artifacts.
 
 | Code | Unicode name | Mushaf letter | Meaning |
 |---|---|---|---|
@@ -568,13 +559,17 @@ Fonts are loaded via Pango `FontDescription` string (e.g. `"Amiri Quran 58"`) ra
 | Quran text | `Amiri Quran` | 58 / 64 | Both layouts: Quranic verse text + Basmalah |
 | Arabic headers | `Amiri Bold` | 46 / 46 | Surah name headers |
 | Footer text | `Amiri` | 26 | Juz footer English text |
-| Waqf indicators | `Amiri Bold` | 24 | Mushaf letter waqf markers |
+| Waqf indicators | `Amiri Bold` | 24 | Mushaf letter waqf markers (overlay above text) |
 
 ### Waqf Mark Rendering
 
-Waqf marks maintain the same `extract_waqf()` approach from `text.py` — Unicode waqf marks are removed from word text and tracked as `mushaf_letters` per word. The `draw_waqf_overlays()` function in `drawing.py` uses `PangoLayout.index_to_pos()` to determine exact word X positions in the Kashida-justified line, then renders Mushaf indicator letters above the corresponding words using a smaller Amiri Bold font.
+Waqf marks are kept in the text during Pango shaping so RAQM/HarfBuzz positions them via GPOS `mark`, `mkmk`, `+ccmp` features (`Pango.AttrFontFeatures`). This binds each combining mark to its base glyph at the shaper level.
 
-This approach correctly follows traditional Mushaf conventions where stop indicators (م ج ط ز ن و ي and compounds like صلي قلي صل طم) are shown as distinct letters above the text.
+**Dual rendering eliminated**: `draw_text_line()` renders clean text (`WordSlot.text_clean` — waqf marks stripped) so the main text shows no native waqf glyphs. `draw_waqf_overlays()` uses the marked-text layout (`WordSlot.text` — marks included) for `index_to_pos()` positioning, drawing Mushaf indicator letters above. One rendering path per codepoint: extract to Mushaf letter, never render both the native glyph and the overlay.
+
+Mark -> Mushaf letter mapping uses `WAQF_MUSHAF_MAP` in `text.py`. Key corrections:
+- **U+06DC** (ARABIC SMALL HIGH SEEN ۜ): "صل" → **"س"** (seen = saktah/brief pause)
+- **U+06D8** (ARABIC SMALL HIGH MEEM INITIAL FORM ۘ): "طم" → **"م"** (meem = waqf lazim)
 
 ### Full Waqf Mark Inventory in `quran.json`
 
@@ -646,7 +641,8 @@ This approach correctly follows traditional Mushaf conventions where stop indica
 |---|---|
 | *(current)* | Milestone 5: PangoCairo refactor — Kashida justification, Cairo drawing, page-based rendering, streaming FFmpeg encode |
 | *(current)* | Bug fixes: UTF-8 byte offsets in word tracking, ink-based vertical centering, constrained last-line width, proper is_verse_last for continuous flow |
-| *(current)* | Waqf overlay positional fix: per-line byte tracking, RTL visual extent via index_to_pos at word boundaries, proper centering 4px above text |
+| *(current)* | Waqf positioning fix: keep waqf marks in Pango text during shaping; enable `+mark` `+mkmk` `+ccmp` OpenType features; eliminated dual rendering — clean text in draw_text_line, marks-only in overlay positioning |
+| *(current)* | Waqf mapping fix: corrected U+06DC (seen) "صل"→"س" and U+06D8 (meem initial) "طم"→"م" in WAQF_MUSHAF_MAP |
 
 ---
 
@@ -659,8 +655,8 @@ This approach correctly follows traditional Mushaf conventions where stop indica
 3. **Sukun variant (U+06E1)** — Normalized to U+0652 before basmalah comparison
 4. **Pango ink offset** — `_show_layout_at()` uses `ink.y` (not `logical.y`) to place visible text at the exact desired position. Callers use `ink.height` for vertical centring.
 5. **Empty verse after basmalah strip** — Skipped
-6. **WAQF marks** — `extract_waqf()` removes Unicode waqf marks from word text, tracks `mushaf_letters` for overlay rendering. PangoAttributes colour verse markers in VERSE_MARKER_COLOR
-7. **Farsi yeh / hair space / word joiner / open tanween** — Normalized via `ARABIC_NORMALIZE_MAP`; waqf marks handled by `WAQF_MUSHAF_MAP` + `extract_waqf()`
+6. **Waqf marks** — Keep marks in text for GPOS shaping; clean text rendered separately; Mushaf overlays positioned from shaped layout; dual rendering eliminated via `text_clean`/`text` split per WordSlot
+7. **Farsi yeh / hair space / word joiner / open tanween** — Normalized via `ARABIC_NORMALIZE_MAP`
 8. **BOM character** — Stripped from all verse text
 9. **WAQF detection** — Uses Unicode categories `Mn`, `Lm`, and `So` (for rub el hizb and sajdah), requires Arabic block range
 10. **Last line rendering** — In centered mode, only the very last line of the content uses `set_alignment(CENTER)` with `width_px=text_width` (constrained). All other lines are Kashida-justified. The `is_verse_last` flag is True only on the final TextLine, not on every line containing a verse marker.
@@ -676,9 +672,8 @@ This approach correctly follows traditional Mushaf conventions where stop indica
 2. **Partial timing data** — Only 148 entries cached; full download of 6236 MP3s takes hours
 3. **Speed hardcoded** — Always 2× recitation, no `--rate` flag
 4. **Output directory fixed** — Always `output/` under project root
-5. **Waqf mark positioning** — `draw_waqf_overlays()` builds a per-line PangoLayout mirroring `draw_text_line`'s rendering. Per-line UTF-8 byte offsets are computed for each word. `index_to_pos()` is called at both the word's start byte and the next word's start byte (end+1), giving the visual extent in RTL. The Mushaf letter is centered within that word extent, 4px above the text ink top.
-6. **API vs local data differences** — The alquran.cloud API includes U+06DF (rounded zero), U+08F0–U+08F2 (open tanween), and other chars not present in quran.json. `ARABIC_NORMALIZE_MAP` handles open tanween; `WAQF_MUSHAF_MAP` handles U+06DF
-7. **No verse highlighting** — Linear scroll, not synced to individual verses
-8. **Legacy `generate_chapter.py`** — Not integrated with the module; no WAQF handling
-9. **No progress ETA** — Timing download logs only every 500 ayahs
-10. **Font dependency** — Requires Amiri Quran and Amiri fonts installed and discoverable by Fontconfig (`fc-list`)
+5. **API vs local data differences** — The alquran.cloud API includes U+06DF (rounded zero), U+08F0–U+08F2 (open tanween), and other chars not present in quran.json. `ARABIC_NORMALIZE_MAP` handles open tanween; waqf marks are handled natively by the font via GPOS
+6. **No verse highlighting** — Linear scroll, not synced to individual verses
+7. **Legacy `generate_chapter.py`** — Not integrated with the module; no WAQF handling
+8. **No progress ETA** — Timing download logs only every 500 ayahs
+9. **Font dependency** — Requires Amiri Quran and Amiri fonts installed and discoverable by Fontconfig (`fc-list`)

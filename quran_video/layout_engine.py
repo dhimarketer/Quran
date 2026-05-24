@@ -19,6 +19,7 @@ import cairo
 from .config import (
     WIDTH, HEIGHT, MARGIN_X, MARGIN_X_JUSTIFIED, TEXT_WIDTH_JUSTIFIED,
     TEXT_COLOR, VERSE_MARKER_COLOR, WAQF_MARKER_COLOR, WAQF_FONT_SIZE,
+    LINE_RULE_COLOR,
     LINE_H_CENTERED, LINE_H_JUSTIFIED,
     FONT_SIZE_QURAN, FONT_SIZE_JUSTIFIED,
     FONT_SIZE_SURAH_AR, FONT_SIZE_SURAH_EN, FONT_SIZE_SURAH_JUSTIFIED,
@@ -26,7 +27,7 @@ from .config import (
     TOP_PAD, BOT_PAD,
 )
 from .text import (
-    attach_waqf_marks, extract_waqf, make_verse_marker, Verse,
+    attach_waqf_marks, extract_waqf, get_waqf_mushaf_letters, make_verse_marker, Verse,
 )
 
 # ---------------------------------------------------------------------------
@@ -39,8 +40,12 @@ class WordSlot:
 
     char_start and char_end are byte offsets into the Pango text buffer
     (Pango uses UTF-8 byte offsets internally).
+
+    text contains waqf marks — used by draw_waqf_overlays for positioning.
+    text_clean has waqf marks stripped — used by draw_text_line for rendering.
     """
     text: str
+    text_clean: str
     mushaf_letters: str
     is_marker: bool       # verse-end marker (U+06DD + numeral)
     char_start: int = 0   # byte offset into Pango text
@@ -239,6 +244,12 @@ class LayoutEngine:
         layout = Pango.Layout.new(pango_ctx)
         layout.set_font_description(self.fd_quran)
         layout.set_text(text)
+
+        ot_features = Pango.AttrFontFeatures.new("mark 1, mkmk 1, ccmp 1")
+        ot_features.start_index = 0
+        ot_features.end_index = len(text.encode("utf-8"))
+        attr_list.insert(ot_features)
+
         layout.set_attributes(attr_list)
         layout.set_width(Pango.units_from_double(self.text_width))
         layout.set_wrap(Pango.WrapMode.WORD)
@@ -271,6 +282,7 @@ class LayoutEngine:
                     continue
                 line_words.append(WordSlot(
                     text=ws.text,
+                    text_clean=ws.text_clean,
                     mushaf_letters=ws.mushaf_letters,
                     is_marker=ws.is_marker,
                     char_start=ws.char_start,
@@ -317,14 +329,17 @@ class LayoutEngine:
             raw_words = attach_waqf_marks(text.split())
 
             for w in raw_words:
+                if not w:
+                    continue
                 cleaned, mushaf = extract_waqf(w)
                 if not cleaned:
                     continue
                 start = byte_pos
-                text_parts.append(cleaned)
-                byte_pos += len(cleaned.encode("utf-8"))
+                text_parts.append(w)
+                byte_pos += len(w.encode("utf-8"))
                 word_slots.append(WordSlot(
-                    text=cleaned,
+                    text=w,
+                    text_clean=cleaned,
                     mushaf_letters=mushaf,
                     is_marker=False,
                     char_start=start,
@@ -343,6 +358,7 @@ class LayoutEngine:
             byte_pos = end
             word_slots.append(WordSlot(
                 text=marker,
+                text_clean=marker,
                 mushaf_letters="",
                 is_marker=True,
                 char_start=start,
