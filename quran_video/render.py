@@ -15,12 +15,11 @@ import cairo
 
 from .config import (
     WIDTH, HEIGHT, MARGIN_X, MARGIN_X_JUSTIFIED,
-    BG_COLOR_CENTERED, DARK_GOLD, WAQF_FONT_SIZE,
+    BG_COLOR_CENTERED, DARK_GOLD,
     LINE_H_CENTERED, LINE_H_JUSTIFIED,
     FONT_SIZE_QURAN, FONT_SIZE_JUSTIFIED,
     FONT_SIZE_SURAH_AR, FONT_SIZE_SURAH_EN, FONT_SIZE_SURAH_JUSTIFIED,
     FONT_SIZE_BASMALAH, FONT_SIZE_BASMALAH_JUSTIFIED,
-    FONT_AMIRI_BOLD, FONT_AMIRI_REG,
 )
 from .layout_engine import (
     LayoutEngine, Page, HeaderItem, BasmalahItem,
@@ -30,7 +29,7 @@ from .drawing import (
     draw_ornament_line, draw_surah_header_centered,
     draw_surah_header_justified, draw_basmalah,
     draw_juz_footer, draw_text_line, draw_line_rule,
-    draw_waqf_overlays, _cairo_rgb, _set_cairo_color,
+    _cairo_rgb, _set_cairo_color,
 )
 
 _AMIRI_QURAN_FAMILY = "Amiri Quran"
@@ -63,10 +62,8 @@ def _make_fds(layout_mode: str):
         f"{_AMIRI_BOLD_FAMILY} Bold {FONT_SIZE_SURAH_EN}")
     fd_footer = Pango.FontDescription.from_string(
         f"{_AMIRI_BOLD_FAMILY} Bold {FONT_SIZE_SURAH_EN}")
-    fd_waqf = Pango.FontDescription.from_string(
-        f"{_AMIRI_BOLD_FAMILY} Bold {WAQF_FONT_SIZE}")
 
-    return fd_quran, fd_ar, fd_basm, fd_en, fd_footer, fd_waqf
+    return fd_quran, fd_ar, fd_basm, fd_en, fd_footer
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +76,7 @@ def render_pages(pages: list[Page], total_height: int,
 
     Returns (page_arrays, total_height).
     """
-    fd_quran, fd_ar, fd_basm, fd_en, fd_footer, fd_waqf = _make_fds(layout_mode)
+    fd_quran, fd_ar, fd_basm, fd_en, fd_footer = _make_fds(layout_mode)
 
     if layout_mode == "justified":
         line_h = LINE_H_JUSTIFIED
@@ -89,8 +86,7 @@ def render_pages(pages: list[Page], total_height: int,
     arrays = []
     for page in pages:
         arr = _render_one_page(page, total_height, layout_mode, line_h,
-                               fd_quran, fd_ar, fd_basm, fd_en, fd_footer,
-                               fd_waqf)
+                               fd_quran, fd_ar, fd_basm, fd_en, fd_footer)
         arrays.append((page.scroll_y, arr))
 
     return arrays
@@ -98,7 +94,7 @@ def render_pages(pages: list[Page], total_height: int,
 
 def _render_one_page(page: Page, total_height: int, layout_mode: str,
                      line_h: int, fd_quran, fd_ar, fd_basm, fd_en,
-                     fd_footer, fd_waqf) -> np.ndarray:
+                     fd_footer) -> np.ndarray:
     """Render a single page to a numpy array."""
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, WIDTH, HEIGHT)
     cr = cairo.Context(surf)
@@ -134,10 +130,6 @@ def _render_one_page(page: Page, total_height: int, layout_mode: str,
     for i, tl in enumerate(page.text_lines):
         draw_text_line(cr, tl.words, tl.y, tl.is_verse_last,
                        layout_mode, line_h, fd_quran)
-        draw_waqf_overlays(cr, tl.words, tl.y, fd_quran, fd_waqf,
-                            layout_mode=layout_mode,
-                            is_verse_last=tl.is_verse_last,
-                            line_h=line_h)
 
         # Ruled line below (skip after the last text line on this page)
         is_page_last_line = (i == len(page.text_lines) - 1)

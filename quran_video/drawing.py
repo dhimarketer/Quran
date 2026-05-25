@@ -146,6 +146,9 @@ def draw_surah_header_centered(cr, y, name_ar, name_en,
                                fd_ar: Pango.FontDescription,
                                fd_en: Pango.FontDescription):
     """Centred surah header with Arabic + English names and ornament lines."""
+    GAP_AR = 82   # clears tall Arabic diacritics (~104px ink @ 46px font)
+    GAP_EN = 20   # gap below English name before bottom ornament
+
     draw_ornament_line(cr, y, WIDTH, GOLD, 2)
 
     y += 28
@@ -154,14 +157,14 @@ def draw_surah_header_centered(cr, y, name_ar, name_en,
     _set_cairo_color(cr, GOLD)
     _show_layout_at(cr, layout_ar, (WIDTH - ar_w) / 2, y)
 
-    y += FONT_SIZE_SURAH_AR + 12
+    y += FONT_SIZE_SURAH_AR + GAP_AR
     if name_en:
         layout_en = _make_pango_layout(cr, name_en, _AMIRI_BOLD_FAMILY, FONT_SIZE_SURAH_EN)
         en_w, _, _, _ = _pango_text_extents(layout_en)
         _set_cairo_color(cr, DARK_GOLD)
         _show_layout_at(cr, layout_en, (WIDTH - en_w) / 2, y)
 
-    y += FONT_SIZE_SURAH_EN + 16
+    y += FONT_SIZE_SURAH_EN + GAP_EN
     draw_ornament_line(cr, y, WIDTH, GOLD, 2)
 
 
@@ -411,14 +414,14 @@ def draw_waqf_overlays(cr, line_words, y, quran_fd, waqf_fd,
     p_layout.set_attributes(attr_list)
 
     ink, log = p_layout.get_pixel_extents()
-    base_x = WIDTH - margin_x - text_width + log.x
+    base_x = WIDTH - margin_x - text_width
     text_ink_top = y + (line_h - ink.height) // 2
 
     waqf_items: list[tuple[int, int, str]] = []
     byte_pos = 0
     for wi, w in enumerate(line_words):
         w_bytes = len(w.text.encode("utf-8"))
-        byte_next = byte_pos + w_bytes + 1
+        byte_next = byte_pos + w_bytes
         if w.mushaf_letters:
             try:
                 r_start = p_layout.index_to_pos(byte_pos)
@@ -430,7 +433,7 @@ def draw_waqf_overlays(cr, line_words, y, quran_fd, waqf_fd,
                 waqf_items.append((word_left, word_right, w.mushaf_letters))
             except Exception:
                 pass
-        byte_pos = byte_next
+        byte_pos = byte_next + 1
 
     if not waqf_items:
         return

@@ -82,16 +82,23 @@ python -m quran_video [OPTIONS]
 | `--ayahs` | str | None | Verse range within surah: `START-END` |
 | `--layout` | `centered`\|`justified` | `centered` | Layout style |
 | `--output` | str | None | Custom output filename |
-| `--quick` | flag | False | Fast mode — fixed 4 s/verse, ultrafast encode |
+| `--duration` | str | None | Total video duration (e.g. `30m`, `1800`, `1h30m`). Juz default: 30m. Surah: derived from juz proportionally. |
+| `--workers` | int | None | Number of parallel encode workers. None/0 = serial (default). N > 1 = parallel. |
+| `--hang-timeout` | int | 120 | Seconds without ffmpeg progress before auto-abort (0 = disable) |
 
 ### CLI Flow
 
 1. Parse args
-2. If not `--quick`: load `quran.json`, download ayah durations (Al-Afasy)
+2. If `--duration`: parse duration string (e.g. `30m`, `1h30m`, `1800`) into seconds
 3. If `--verse`: parse spec → `generate_surah_video(chapter, layout, range, ...)`
 4. If `--surah` [+ optional `--ayahs`]: → `generate_surah_video(...)`
-5. If `--juz`: → `generate_juz_video(juz_num, ...)`
+5. If `--juz`: → `generate_juz_video(juz_num, ...)` — adds 3 s footer hold at end by capping `scroll_range` at last page's `scroll_y` and appending `3*FPS` extra frames
 6. If no args: print help, exit(1)
+
+Duration defaults:
+- **Juz**: 30 minutes (1800 s) + 3 s footer hold = 1803 s total
+- **Surah / verse range**: derived proportionally from juz default — `num_verses × (DEFAULT_JUZ_DURATION / AVG_AYAHS_PER_JUZ)` where AVG_AYAHS_PER_JUZ = 6236/30 ≈ 208
+- Per-ayah MP3 timing downloads are no longer triggered by default
 
 ### Verse Spec Parser
 
@@ -254,29 +261,79 @@ Each page is rendered independently as a 1920×1080 `cairo.ImageSurface`:
 ### Stage 5: Duration Calculation
 
 ```python
-total_duration = (
-    2.0                                          # base
-    + num_headers    * (3.0 / RATE_2X)           # 1.5 s each
-    + num_basmalahs  * (3.0 / RATE_2X)           # 1.5 s each
-    + sum(verse_timings) / RATE_2X               # alafasy durations ÷ 2
-)
-RATE_2X = 2.0   # 2× recitation speed
+# Juz: fixed default or user-specified
+if duration is None:
+    duration = DEFAULT_JUZ_DURATION  # 1800 s (30 min)
+
+# Surah / verse range: derived proportionally from juz default
+num_verses = count_verses(elements)
+duration = num_verses * (DEFAULT_JUZ_DURATION / AVG_AYAHS_PER_JUZ)
+
+DEFAULT_JUZ_DURATION = 30 * 60   # 1800 s
+AVG_AYAHS_PER_JUZ = 6236 / 30    # ≈ 207.87
 ```
 
-Quick mode: `4.0 / 2.0 = 2.0 s` per verse.
+Duration controls the number of frames (`num_frames = duration * FPS`). Scroll speed is uniform across all content (`step = scroll_range / num_frames`). More text → more pages to scroll through → higher `scroll_range` → faster pixel scroll rate to fit the fixed duration.
+
+Per-ayah MP3 timing (`timing.py`) is preserved but not invoked by default. Use `--duration` to set a fixed total duration instead.
 
 ### Stage 6: Video Encoding (`encode.py`)
 
-**Function**: `encode_video(page_arrays, output_path, num_frames, scroll_range, ...)`
+**Functions**:
 
-Frame generation:
+- `encode_video(page_arrays, output_path, num_frames, scroll_range, progress, workers, hang_timeout)` — top-level entry point. Defaults to serial mode for reliability.
+- `_encode_serial(...)` — single ffmpeg process with custom OS pipe (1 MiB buffer), stderr parsing for real progress, hang detection watchdog
+- `_encode_parallel(...)` — splits frames into worker chunks, each encodes to a temp MP4 segment, then concat. Progress via output file size polling.
+- `_worker_encode(...)` — runs in child process via `multiprocessing.Process`; each worker gets its own large-buffer pipe
+- `_concat_parts(part_paths, output_path)` — ffmpeg concat demuxer (no re-encode)
+- `_get_frame(sorted_pages, scroll_y)` — extract a 1080px slice from pre-rendered pages
+- `encoded_ms_from_bytes(total_bytes, total_duration_ms, min_ratio)` — heuristic that maps MP4 file size to approximate encoded video milliseconds (used for parallel-mode progress only)
+
+**Page-based frame generation**:
 - `page_arrays`: list of `(scroll_y, numpy_array)` tuples, one per 1920×1080 page
-- For each frame, calculate the virtual scroll position `y`
-- Look up the page that covers that `y` range
+- For each frame, calculate the virtual scroll position `y = int(frame_index × step)`
+- Binary-search the sorted pages to find the page covering that `y` range
 - Extract a 1080-pixel-tall slice from the page array
-- Pipe raw RGB24 bytes to FFmpeg stdin via subprocess
+- Write raw RGB24 bytes via `os.write(fd, buf)` through a custom OS pipe
 
-**Key improvement**: Instead of holding one massive numpy array in memory and slicing it per frame, each frame is read from the appropriate pre-rendered page. Memory usage is O(pages × 1920 × 1080 × 3) ≈ 6 MB per page, not proportional to content length.
+**Key design improvements** (vs earlier attempts):
+
+| Problem | Previous Approach | New Solution |
+|---|---|---|
+| Pipe write blocks | `subprocess.PIPE` (64 KiB OS buffer) | `os.pipe()` + `fcntl.F_SETPIPE_SZ` → 1 MiB buffer (16× larger) |
+| CPU underutilisation | `-threads 2` fixed per ffmpeg | Serial: `-threads 0` (auto, all cores); Parallel: `cpu_count // workers` threads each |
+| Stderr deadlock | No reader thread in early attempts | Dedicated stderr reader thread per ffmpeg process, reads `out_time_ms=` lines |
+| Parallel progress race | `multiprocessing.Manager().Value/dict()` with locks | Parallel progress via polling output MP4 file sizes on disk (no IPC) |
+| No hang detection | Process hangs silently | Watchdog thread monitors `encoded_ms` changes; warns at 30 s, kills ffmpeg at 120 s |
+| Inaccurate ETA | Frames-sent ≠ frames-encoded | ETA calculated from ffmpeg's `out_time_ms=` value (real encoder output time) |
+
+**Serial encoding** (default, `--workers 1`):
+1. Create OS pipe with 1 MiB kernel buffer via `os.pipe()` + `fcntl.F_SETPIPE_SZ`
+2. Launch ffmpeg with `-threads 0` (auto-detect all CPU cores), `-progress pipe:2`, `-loglevel error`
+3. Stderr reader thread parses `out_time_ms=` lines for real encoding progress (milliseconds of video encoded)
+4. Watchdog thread polls `encoded_ms` every 5 s; warns at 30 s stall, kills ffmpeg at 120 s
+5. Main loop writes each frame via `os.write(w_fd, buf)` — rarely blocks due to 1 MiB buffer
+6. Progress report every 5 s of video: percentage, elapsed, ETA, fps
+7. Close write end, wait for ffmpeg, report final stats
+
+**Parallel encoding** (when `--workers N` with N > 1):
+1. Split `num_frames` into N roughly equal chunks
+2. Launch N `multiprocessing.Process` instances, each running `_worker_encode()`
+3. Each worker: own OS pipe with 1 MiB buffer, own ffmpeg instance, `-threads cpu_count/N`
+4. Page arrays passed as args (pickled) — the old `_GLOBAL_SORTED_PAGES` fork-COW approach is removed for simplicity
+5. Main process polls output MP4 file sizes every second for approximate progress (mapped to encoded ms via `encoded_ms_from_bytes` heuristic)
+6. After all workers finish, concatenate segments via ffmpeg concat demuxer (`-c copy`)
+7. Clean up temp `.tmp_*` segment files
+
+**Encoding settings**:
+- Preset `veryfast`, CRF 23 — good visual quality for 50" TV display, compact file size (~80 MB per 30 min juz), fast encoding (~5 min per juz on 12-core CPU)
+- All output uses `-movflags +faststart` for streaming-friendly MP4
+
+**Hang detection**:
+- Configurable via `--hang-timeout SEC` CLI flag (default: 120 s, 0 = disable)
+- Watchdog thread checks every 5 s if `encoded_ms` has changed since last check
+- 30 s with no progress → prints WARNING to stderr
+- `hang_timeout` seconds with no progress → kills ffmpeg process, prints error
 
 ---
 
@@ -567,6 +624,8 @@ Waqf marks are kept in the text during Pango shaping so RAQM/HarfBuzz positions 
 
 **Dual rendering eliminated**: `draw_text_line()` renders clean text (`WordSlot.text_clean` — waqf marks stripped) so the main text shows no native waqf glyphs. `draw_waqf_overlays()` uses the marked-text layout (`WordSlot.text` — marks included) for `index_to_pos()` positioning, drawing Mushaf indicator letters above. One rendering path per codepoint: extract to Mushaf letter, never render both the native glyph and the overlay.
 
+**Positioning**: `base_x` MUST NOT include `log.x` from `get_pixel_extents()`. For RTL left-aligned text, `log.x` is NOT 0 — Pango includes the text's left-edge offset in the logical extent x-coordinate (~1159px for typical justified lines). Since `index_to_pos()` already returns positions in layout coordinates that account for alignment, adding `log.x` double-counts the offset, shifting all waqf markers far to the right (often off-screen past `WIDTH`=1920). The correct conversion is simply `base_x = WIDTH - margin_x - text_width` (the layout origin x).
+
 Mark -> Mushaf letter mapping uses `WAQF_MUSHAF_MAP` in `text.py`. Key corrections:
 - **U+06DC** (ARABIC SMALL HIGH SEEN ۜ): "صل" → **"س"** (seen = saktah/brief pause)
 - **U+06D8** (ARABIC SMALL HIGH MEEM INITIAL FORM ۘ): "طم" → **"م"** (meem = waqf lazim)
@@ -619,7 +678,8 @@ Mark -> Mushaf letter mapping uses `WAQF_MUSHAF_MAP` in `text.py`. Key correctio
 | `HEIGHT` | 1080 | Video height (Full HD) |
 | `FPS` | 24 | Frames per second |
 | `RATE_2X` | 2.0 | Scroll speed multiplier (2× recitation) |
-| `FIXED_DURATION_PER_VERSE` | 4.0 | Default verse duration when no timing data |
+| `DEFAULT_JUZ_DURATION` | 1800 (30 min) | Default juz video duration in seconds |
+| `AVG_AYAHS_PER_JUZ` | 207.87 | Average ayahs per juz (6236/30) — used for proportional surah duration |
 
 ---
 
@@ -638,11 +698,15 @@ Mark -> Mushaf letter mapping uses `WAQF_MUSHAF_MAP` in `text.py`. Key correctio
 ## Commit History (current branch)
 
 | Hash | Description |
-|---|---|
+|---|---|---|
+| *(current)* | Removed `--quick` mode (ultrafast produced bloated files). Default is veryfast + CRF 23 (~81 MB per 30 min juz, ~5 min encode). Encoding overhaul: custom OS pipe with 1 MiB buffer (F_SETPIPE_SZ), `--threads 0` for full CPU utilisation, stderr reader thread per ffmpeg, hang detection watchdog (warn at 30s, abort at 120s), parallel progress via MP4 file size polling (no shared memory IPC), `--hang-timeout` CLI flag, removed fragile Manager.Value/dict IPC |
+| *(current)* | Duration parameter: `--duration` flag (e.g. `30m`, `1h30m`), juz default 30 min, surah duration derived proportionally from juz via `AVG_AYAHS_PER_JUZ`; removed per-ayah MP3 timing trigger from default flow |
 | *(current)* | Milestone 5: PangoCairo refactor — Kashida justification, Cairo drawing, page-based rendering, streaming FFmpeg encode |
 | *(current)* | Bug fixes: UTF-8 byte offsets in word tracking, ink-based vertical centering, constrained last-line width, proper is_verse_last for continuous flow |
 | *(current)* | Waqf positioning fix: keep waqf marks in Pango text during shaping; enable `+mark` `+mkmk` `+ccmp` OpenType features; eliminated dual rendering — clean text in draw_text_line, marks-only in overlay positioning |
 | *(current)* | Waqf mapping fix: corrected U+06DC (seen) "صل"→"س" and U+06D8 (meem initial) "طم"→"م" in WAQF_MUSHAF_MAP |
+| *(current)* | Waqf overlay byte-tracking fix: `byte_next = byte_pos + w_bytes` (without +1) so word extent excludes trailing space; `byte_pos = byte_next + 1` to skip space for next word. Previously `byte_next` included the space, centering waqf letters over word+space instead of just the word — a 12+ px error in justified text. Matches `_build_line_attrs` pattern. |
+| *(current)* | Footer hold: 3-second static hold at end of juz videos — `scroll_range` capped at last rendered page's `scroll_y` so footer stays visible during extra `3*FPS` hold frames |
 
 ---
 
@@ -655,7 +719,7 @@ Mark -> Mushaf letter mapping uses `WAQF_MUSHAF_MAP` in `text.py`. Key correctio
 3. **Sukun variant (U+06E1)** — Normalized to U+0652 before basmalah comparison
 4. **Pango ink offset** — `_show_layout_at()` uses `ink.y` (not `logical.y`) to place visible text at the exact desired position. Callers use `ink.height` for vertical centring.
 5. **Empty verse after basmalah strip** — Skipped
-6. **Waqf marks** — Keep marks in text for GPOS shaping; clean text rendered separately; Mushaf overlays positioned from shaped layout; dual rendering eliminated via `text_clean`/`text` split per WordSlot
+6. **Waqf marks** — Keep marks in text for GPOS shaping; clean text rendered separately; Mushaf overlays positioned from shaped layout; dual rendering eliminated via `text_clean`/`text` split per WordSlot; `base_x` must not include `log.x` (Pango already accounts for alignment in `index_to_pos()` return values — `log.x` for RTL left-aligned text is non-zero, typically 600–1200 px, and would double-count the alignment offset)
 7. **Farsi yeh / hair space / word joiner / open tanween** — Normalized via `ARABIC_NORMALIZE_MAP`
 8. **BOM character** — Stripped from all verse text
 9. **WAQF detection** — Uses Unicode categories `Mn`, `Lm`, and `So` (for rub el hizb and sajdah), requires Arabic block range
@@ -670,10 +734,10 @@ Mark -> Mushaf letter mapping uses `WAQF_MUSHAF_MAP` in `text.py`. Key correctio
 
 1. **No audio output** — Videos are silent; durations only control scroll speed
 2. **Partial timing data** — Only 148 entries cached; full download of 6236 MP3s takes hours
-3. **Speed hardcoded** — Always 2× recitation, no `--rate` flag
+3. **Speed via duration, not rate** — User controls total duration; scroll speed derived from content height ÷ duration. No separate `--rate` flag.
 4. **Output directory fixed** — Always `output/` under project root
 5. **API vs local data differences** — The alquran.cloud API includes U+06DF (rounded zero), U+08F0–U+08F2 (open tanween), and other chars not present in quran.json. `ARABIC_NORMALIZE_MAP` handles open tanween; waqf marks are handled natively by the font via GPOS
 6. **No verse highlighting** — Linear scroll, not synced to individual verses
 7. **Legacy `generate_chapter.py`** — Not integrated with the module; no WAQF handling
-8. **No progress ETA** — Timing download logs only every 500 ayahs
+8. ~~**No progress ETA**~~ — Resolved: encoding progress now shows percentage, elapsed, ETA, and fps parsed from ffmpeg stderr
 9. **Font dependency** — Requires Amiri Quran and Amiri fonts installed and discoverable by Fontconfig (`fc-list`)

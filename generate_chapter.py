@@ -3,12 +3,14 @@
 No audio. Uses available fonts (NotoNaskhArabic + Amiri).
 
 Usage:
-    python3 generate_chapter.py [chapter_number] [output_filename.mp4]
-    python3 generate_chapter.py 30 chapter30.mp4
+    python3 generate_chapter.py [chapter_number] [--duration 30m] [--output filename.mp4]
+    python3 generate_chapter.py 30 --duration 15m --output chapter30.mp4
 """
 
+import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -18,8 +20,10 @@ from PIL import Image, ImageDraw, ImageFont
 WIDTH = 1920
 HEIGHT = 1080
 FPS = 24
-VERSE_DURATION = 4.0  # seconds per verse (no audio)
 HEADER_DURATION = 3.0
+
+DEFAULT_JUZ_DURATION = 30 * 60  # 30 minutes in seconds
+AVG_AYAHS_PER_JUZ = 6236 / 30   # ~208 ayahs per juz
 
 # Fonts (fallback chain)
 FONT_PATHS = {
@@ -59,6 +63,32 @@ QURAN_JSON = os.path.join(SCRIPT_DIR, "quran.json")
 
 import imageio_ffmpeg
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def parse_duration(s):
+    """Parse a duration string like '30m', '1h30m', '1800' into seconds."""
+    if isinstance(s, (int, float)):
+        return float(s)
+    s = s.strip().lower()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    total = 0.0
+    h_match = re.search(r'(\d+)\s*h', s)
+    if h_match:
+        total += int(h_match.group(1)) * 3600
+    m_match = re.search(r'(\d+)\s*m', s)
+    if m_match:
+        total += int(m_match.group(1)) * 60
+    s_match = re.search(r'(\d+(?:\.\d+)?)\s*s(?:ec)?', s)
+    if s_match:
+        total += float(s_match.group(1))
+    if total > 0:
+        return total
+    raise ValueError(f"Cannot parse duration: {s}")
 
 
 def load_font(key, size):
@@ -184,7 +214,7 @@ def render_tall_image(elements, fonts):
     return np.array(img)
 
 
-def generate_chapter_video(chapter_num, output_filename=None):
+def generate_chapter_video(chapter_num, output_filename=None, duration=None):
     quran = load_quran()
     surah = None
     for s in quran:
@@ -219,16 +249,16 @@ def generate_chapter_video(chapter_num, output_filename=None):
 
     tall_arr = render_tall_image(elements, fonts)
 
-    # Calculate duration (no audio, fixed per verse)
     verse_count = len([e for e in elements if e[0] == "verse"])
-    total_duration = HEADER_DURATION + (verse_count * VERSE_DURATION)
+    if duration is None:
+        duration = verse_count * (DEFAULT_JUZ_DURATION / AVG_AYAHS_PER_JUZ)
 
     total_height = tall_arr.shape[0]
-    num_frames = int(total_duration * FPS)
+    num_frames = int(duration * FPS)
     scroll_range = total_height - HEIGHT
     step = scroll_range / max(num_frames, 1)
 
-    print(f"  Verses: {verse_count}, Duration: {total_duration:.1f}s, Height: {total_height}px")
+    print(f"  Verses: {verse_count}, Duration: {duration:.0f}s ({duration/60:.1f}min), Height: {total_height}px")
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     if not output_filename:
@@ -253,6 +283,14 @@ def generate_chapter_video(chapter_num, output_filename=None):
 
 
 if __name__ == "__main__":
-    chapter = int(sys.argv[1]) if len(sys.argv) > 1 else 30
-    out = sys.argv[2] if len(sys.argv) > 2 else None
-    generate_chapter_video(chapter, out)
+    parser = argparse.ArgumentParser(description="Generate text-only scrolling video for a Quran chapter")
+    parser.add_argument("chapter", type=int, nargs="?", default=30, help="Chapter number (default: 30)")
+    parser.add_argument("--duration", "-d", type=str, help="Total video duration (e.g. 30m, 1800). Default: derived from juz proportion.")
+    parser.add_argument("--output", "-o", type=str, help="Output filename")
+    args = parser.parse_args()
+
+    duration = None
+    if args.duration:
+        duration = parse_duration(args.duration)
+
+    generate_chapter_video(args.chapter, args.output, duration)

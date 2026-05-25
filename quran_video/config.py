@@ -10,6 +10,8 @@ WIDTH = 1920
 HEIGHT = 1080
 FPS = 24
 RATE_2X = 2.0
+DEFAULT_JUZ_DURATION = 30 * 60  # 30 minutes in seconds
+AVG_AYAHS_PER_JUZ = 6236 / 30   # ~208 ayahs per juz
 
 FONT_AMIRI_QURAN = "/home/mine/.local/share/fonts/AmiriQuran.ttf"
 if not os.path.exists(FONT_AMIRI_QURAN):
@@ -61,5 +63,5 @@ AYAH_MARKER_CHAR = "\u06DD"
 VERSE_MARKER_OPEN = "\uFD3F"
 VERSE_MARKER_CLOSE = "\uFD3E"
 
-FFMPEG_PRESET = "medium"
-FFMPEG_CRF = 20
+FFMPEG_PRESET = "veryfast"
+FFMPEG_CRF = 23

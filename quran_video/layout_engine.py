@@ -18,8 +18,7 @@ import cairo
 
 from .config import (
     WIDTH, HEIGHT, MARGIN_X, MARGIN_X_JUSTIFIED, TEXT_WIDTH_JUSTIFIED,
-    TEXT_COLOR, VERSE_MARKER_COLOR, WAQF_MARKER_COLOR, WAQF_FONT_SIZE,
-    LINE_RULE_COLOR,
+    TEXT_COLOR, VERSE_MARKER_COLOR,
     LINE_H_CENTERED, LINE_H_JUSTIFIED,
     FONT_SIZE_QURAN, FONT_SIZE_JUSTIFIED,
     FONT_SIZE_SURAH_AR, FONT_SIZE_SURAH_EN, FONT_SIZE_SURAH_JUSTIFIED,
@@ -27,7 +26,7 @@ from .config import (
     TOP_PAD, BOT_PAD,
 )
 from .text import (
-    attach_waqf_marks, extract_waqf, get_waqf_mushaf_letters, make_verse_marker, Verse,
+    attach_waqf_marks, extract_waqf, make_verse_marker, Verse,
 )
 
 # ---------------------------------------------------------------------------
@@ -135,11 +134,8 @@ class LayoutEngine:
                 f"{_AMIRI_QURAN_FAMILY} {FONT_SIZE_QURAN}")
             self.fd_ar = Pango.FontDescription.from_string(
                 f"{_AMIRI_BOLD_FAMILY} Bold {FONT_SIZE_SURAH_AR}")
-            self.fd_basm = Pango.FontDescription.from_string(
-                f"{_AMIRI_QURAN_FAMILY} {FONT_SIZE_BASMALAH}")
-
-        self.fd_waqf = Pango.FontDescription.from_string(
-            f"{_AMIRI_BOLD_FAMILY} Bold {WAQF_FONT_SIZE}")
+        self.fd_basm = Pango.FontDescription.from_string(
+            f"{_AMIRI_QURAN_FAMILY} {FONT_SIZE_BASMALAH}")
 
     def _init_constants(self, layout):
         if layout == "justified":
@@ -152,7 +148,7 @@ class LayoutEngine:
             self.text_width = WIDTH - 2 * MARGIN_X
             self.margin_x = MARGIN_X
             self.line_h = LINE_H_CENTERED
-            self.header_h = 36 + 28 + FONT_SIZE_SURAH_AR + 12 + FONT_SIZE_SURAH_EN + 16 + 36
+            self.header_h = 36 + 28 + FONT_SIZE_SURAH_AR + 82 + FONT_SIZE_SURAH_EN + 20 + 36
             self.basmalah_h = FONT_SIZE_BASMALAH + 20 + 36
 
     # -- public API ---------------------------------------------------------
